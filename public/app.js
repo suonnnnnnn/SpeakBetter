@@ -10,6 +10,7 @@ const state = {
   mediaStream: null,
   audioChunks: [],
   audioBlob: null,
+  audioBase64: null,
   timer: null,
   remainingSeconds: 60,
   isRecording: false
@@ -259,29 +260,30 @@ async function startRecording() {
       el.submitBtn.disabled = true;
       el.transcribeStatus.textContent = "⏳ 正在识别语音，完成后可修改再提交…";
 
-      // 先上传音频，再调转写
+      // 先上传音频，upload 时后端会同步 ASR 转写
       try {
         const audioBase64 = await blobToBase64(state.audioBlob);
-        await apiPost("/api/session/upload-audio", {
+        state.audioBase64 = audioBase64; // 缓存，transcribe 时备用
+        const uploadRes = await apiPost("/api/session/upload-audio", {
           sessionId: state.sessionId,
           audioBase64,
           mimeType: state.audioBlob.type || "audio/webm"
         });
 
-        const transcribeRes = await apiPost("/api/session/transcribe", {
-          sessionId: state.sessionId,
-          transcriptText: ""
-        });
-
-        const text = transcribeRes.transcript_text || "";
+        const text = uploadRes.transcript_text || "";
         el.manualTranscript.value = text;
         el.manualTranscript.placeholder = "粘贴或修改你的回答文本…";
-        el.transcribeStatus.textContent = transcribeRes.source === "siliconflow"
-          ? "✓ 识别完成，你可以修改后再提交评估"
-          : "⚠️ 自动识别不可用，请手动粘贴你的回答后提交";
+
+        if (text && uploadRes.transcribe_source === "siliconflow") {
+          el.transcribeStatus.textContent = "✓ 识别完成，你可以修改后再提交评估";
+        } else if (text) {
+          el.transcribeStatus.textContent = "✓ 已完成，你可以修改后再提交评估";
+        } else {
+          el.transcribeStatus.textContent = "⚠️ 自动识别未返回结果，请手动粘贴你的回答后提交";
+        }
       } catch (err) {
         el.manualTranscript.value = "";
-        el.transcribeStatus.textContent = "⚠️ 识别失败，请手动粘贴你的回答后提交";
+        el.transcribeStatus.textContent = `⚠️ 上传失败（${err.message || "网络错误"}），请手动粘贴后提交`;
       } finally {
         el.manualTranscript.disabled = false;
         el.submitBtn.disabled = false;
@@ -351,10 +353,12 @@ async function submitForEvaluation() {
   el.transcribeStatus.textContent = "⏳ AI 评估中，请稍候…";
 
   try {
-    // 如果用户修改了转写文字，把最新文字同步到 session
+    // 把用户最终确认/修改的文字同步给后端，并带上备用音频
     await apiPost("/api/session/transcribe", {
       sessionId: state.sessionId,
-      transcriptText: finalText
+      transcriptText: finalText,
+      audioBase64: state.audioBase64 || "",
+      mimeType: state.audioBlob ? (state.audioBlob.type || "audio/webm") : "audio/webm"
     });
 
     const evaluateRes = await apiPost("/api/session/evaluate", {
@@ -480,6 +484,7 @@ function resetTrainingState() {
   clearTimer();
   state.sessionId = null;
   state.audioBlob = null;
+  state.audioBase64 = null;
   state.audioChunks = [];
   state.remainingSeconds = state.durationType === "3min" ? 180 : 60;
   state.isRecording = false;

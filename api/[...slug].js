@@ -140,21 +140,47 @@ export default async function handler(req, res) {
       }
 
       const audioBase64 = String(body.audioBase64 || body.audio_base64 || "");
-      session.audio_url = null;
-      session.mime_type = String(body.mimeType || body.mime_type || "audio/webm");
-      session.audio_base64 = audioBase64;
-      session.status = "audio_uploaded";
+      const mimeType = String(body.mimeType || body.mime_type || "audio/webm");
+
+      // 上传的同时直接转写，避免跨 Serverless 实例丢失音频数据
+      let transcriptText = "";
+      let transcribeSource = "pending";
+
+      if (audioBase64 && AI_API_KEY) {
+        try {
+          transcriptText = await transcribeAudioBase64WithSiliconFlow(
+            audioBase64,
+            mimeType,
+            `${session.id}.webm`
+          );
+          transcribeSource = "siliconflow";
+        } catch (err) {
+          console.error("[ASR error]", err?.message || err);
+          transcribeSource = "asr_failed";
+        }
+      }
+
+      if (transcriptText) {
+        session.transcript_text = transcriptText;
+        session.speech_features = extractSpeechFeatures(transcriptText);
+        session.status = "transcribed";
+      } else {
+        session.status = "audio_uploaded";
+      }
+
+      session.mime_type = mimeType;
       session.updated_at = new Date().toISOString();
 
       return sendJson(res, 200, {
         ok: true,
-        audio_url: null,
+        transcript_text: transcriptText,
+        transcribe_source: transcribeSource,
         size: audioBase64.length
       });
     }
 
     if (req.method === "POST" && pathname === "/api/session/transcribe") {
-      const body = await parseJsonBody(req);
+      const body = await parseJsonBody(req, 25 * 1024 * 1024);
       const session = findSessionById(body.sessionId || body.session_id);
 
       if (!session) {
@@ -162,20 +188,28 @@ export default async function handler(req, res) {
       }
 
       const manualText = String(body.transcriptText || body.transcript_text || "").trim();
+      // 如果传了 audioBase64（前端直接带过来），优先用 ASR
+      const audioBase64 = String(body.audioBase64 || body.audio_base64 || "");
+      const mimeType = String(body.mimeType || body.mime_type || session.mime_type || "audio/webm");
+
       let transcriptText = manualText;
       let source = "manual";
 
-      if (!transcriptText && session.audio_base64 && AI_API_KEY) {
+      if (!transcriptText && audioBase64 && AI_API_KEY) {
         try {
           transcriptText = await transcribeAudioBase64WithSiliconFlow(
-            session.audio_base64,
-            session.mime_type || "audio/webm",
-            `${session.id}.webm`
+            audioBase64, mimeType, `${session.id}.webm`
           );
           source = "siliconflow";
-        } catch {
-          // Fall back to manual text guidance below.
+        } catch (err) {
+          console.error("[ASR error in transcribe]", err?.message || err);
         }
+      }
+
+      // 如果 upload 时已经转写好了，直接用
+      if (!transcriptText && session.transcript_text && session.transcript_text.length > 5) {
+        transcriptText = session.transcript_text;
+        source = "cached";
       }
 
       if (!transcriptText) {
@@ -184,10 +218,8 @@ export default async function handler(req, res) {
       }
 
       const speechFeatures = extractSpeechFeatures(transcriptText);
-
       session.transcript_text = transcriptText;
       session.speech_features = speechFeatures;
-      delete session.audio_base64;
       session.status = "transcribed";
       session.updated_at = new Date().toISOString();
 
