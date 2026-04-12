@@ -2,7 +2,7 @@ import crypto from "crypto";
 
 const AI_API_KEY = String(process.env.SILICONFLOW_API_KEY || process.env.OPENAI_API_KEY || "").trim();
 const AI_BASE_URL = String(process.env.SILICONFLOW_BASE_URL || "https://api.siliconflow.cn/v1").trim();
-const AI_MODEL = String(process.env.SILICONFLOW_MODEL || process.env.OPENAI_MODEL || "qwen3.5").trim();
+const AI_MODEL = String(process.env.SILICONFLOW_MODEL || process.env.OPENAI_MODEL || "Qwen/Qwen2.5-7B-Instruct").trim();
 const SILICONFLOW_ASR_MODEL = String(process.env.SILICONFLOW_ASR_MODEL || "FunAudioLLM/SenseVoiceSmall").trim();
 
 // Demo deployment keeps sessions in memory so the public preview works
@@ -383,7 +383,7 @@ async function evaluateWithAI(payload) {
 
   const prompt = [
     "你是专业的中文口语表达教练。",
-    "请对用户回答做结构化评估，只返回 JSON。",
+    "请对用户回答做结构化评估，只返回 JSON，字段包括：overall_score, dimension_scores, detected_issues, issue_tags, strengths, suggestions, thinking_guide, rewrites, summary。",
     JSON.stringify(payload)
   ].join("\n");
 
@@ -402,13 +402,14 @@ async function evaluateWithAI(payload) {
   });
 
   if (!response.ok) {
-    return null;
+    const errText = await response.text().catch(() => "");
+    throw new Error(`AI evaluate failed: ${response.status} ${errText.slice(0, 200)}`);
   }
 
   const json = await response.json();
   const content = safeJsonParse(json?.choices?.[0]?.message?.content || "{}");
   if (!content || typeof content !== "object") {
-    return null;
+    throw new Error("AI returned invalid JSON");
   }
 
   return normalizeReport(content, payload);
