@@ -28,7 +28,32 @@ export default async function handler(req, res) {
         ok: true,
         service: "speakbetter-mvp-vercel",
         aiEnabled: Boolean(AI_API_KEY),
+        asrModel: SILICONFLOW_ASR_MODEL,
+        aiModel: AI_MODEL,
+        baseUrl: AI_BASE_URL,
         serverTime: new Date().toISOString()
+      });
+    }
+
+    // 调试接口：用一句话文本直接测评估链路
+    if (req.method === "POST" && pathname === "/api/debug/evaluate") {
+      const body = await parseJsonBody(req);
+      const text = String(body.text || "我认为团队效率低的原因是目标不清晰，沟通不畅。");
+      const payload = {
+        topic: { content: "测试题目", title: "测试", topic_type: "logic" },
+        mode_type: "logic",
+        duration_type: "1min",
+        transcript_text: text,
+        speech_features: extractSpeechFeatures(text)
+      };
+      const aiReport = await evaluateWithAI(payload).catch((e) => ({ __error: e?.message }));
+      const fallbackReport = evaluateFallback(payload);
+      return sendJson(res, 200, {
+        ok: true,
+        aiReport,
+        usedFallback: !aiReport || !!aiReport.__error,
+        fallbackScore: fallbackReport.overall_score,
+        aiScore: aiReport?.overall_score
       });
     }
 
