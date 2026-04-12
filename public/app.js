@@ -33,8 +33,12 @@ const el = {
   recordStatus: document.getElementById("recordStatus"),
   recordBtn: document.getElementById("recordBtn"),
   stopBtn: document.getElementById("stopBtn"),
+  recordingPanel: document.getElementById("recordingPanel"),
+  transcriptPanel: document.getElementById("transcriptPanel"),
   submitBtn: document.getElementById("submitBtn"),
+  reRecordBtn: document.getElementById("reRecordBtn"),
   trainingMessage: document.getElementById("trainingMessage"),
+  transcribeStatus: document.getElementById("transcribeStatus"),
   manualTranscript: document.getElementById("manualTranscript"),
   overallScore: document.getElementById("overallScore"),
   resultSummary: document.getElementById("resultSummary"),
@@ -72,6 +76,22 @@ function bindEvents() {
   el.recordBtn.addEventListener("click", startRecording);
   el.stopBtn.addEventListener("click", stopRecording);
   el.submitBtn.addEventListener("click", submitForEvaluation);
+  el.reRecordBtn.addEventListener("click", () => {
+    // 回到录音阶段
+    el.transcriptPanel.classList.add("hidden");
+    el.recordingPanel.classList.remove("hidden");
+    el.manualTranscript.value = "";
+    el.recordStatus.textContent = "待开始";
+    el.recordStatus.classList.remove("recording");
+    el.recordBtn.disabled = false;
+    el.stopBtn.disabled = true;
+    state.audioBlob = null;
+    state.audioChunks = [];
+    state.remainingSeconds = state.durationType === "3min" ? 180 : 60;
+    renderTimer();
+    setTrainingMessage("");
+  });
+
   el.retryBtn.addEventListener("click", () => {
     resetTrainingState();
     switchTab("homeTab");
@@ -221,16 +241,51 @@ async function startRecording() {
       }
     };
 
-    recorder.onstop = () => {
+    recorder.onstop = async () => {
       state.audioBlob = new Blob(state.audioChunks, { type: recorder.mimeType || "audio/webm" });
       state.isRecording = false;
-      el.recordStatus.textContent = "录音已完成";
+      el.recordStatus.textContent = "录音完成";
       el.recordStatus.classList.remove("recording");
       el.recordBtn.disabled = false;
       el.stopBtn.disabled = true;
-      el.submitBtn.disabled = false;
       clearTimer();
-      setTrainingMessage("录音完成，可以直接提交评估，也可以补充手动转写。");
+
+      // 切换到转写确认面板
+      el.recordingPanel.classList.add("hidden");
+      el.transcriptPanel.classList.remove("hidden");
+      el.manualTranscript.value = "";
+      el.manualTranscript.placeholder = "转写中，请稍候…";
+      el.manualTranscript.disabled = true;
+      el.submitBtn.disabled = true;
+      el.transcribeStatus.textContent = "⏳ 正在识别语音，完成后可修改再提交…";
+
+      // 先上传音频，再调转写
+      try {
+        const audioBase64 = await blobToBase64(state.audioBlob);
+        await apiPost("/api/session/upload-audio", {
+          sessionId: state.sessionId,
+          audioBase64,
+          mimeType: state.audioBlob.type || "audio/webm"
+        });
+
+        const transcribeRes = await apiPost("/api/session/transcribe", {
+          sessionId: state.sessionId,
+          transcriptText: ""
+        });
+
+        const text = transcribeRes.transcript_text || "";
+        el.manualTranscript.value = text;
+        el.manualTranscript.placeholder = "粘贴或修改你的回答文本…";
+        el.transcribeStatus.textContent = transcribeRes.source === "siliconflow"
+          ? "✓ 识别完成，你可以修改后再提交评估"
+          : "⚠️ 自动识别不可用，请手动粘贴你的回答后提交";
+      } catch (err) {
+        el.manualTranscript.value = "";
+        el.transcribeStatus.textContent = "⚠️ 识别失败，请手动粘贴你的回答后提交";
+      } finally {
+        el.manualTranscript.disabled = false;
+        el.submitBtn.disabled = false;
+      }
     };
 
     recorder.start(250);
@@ -281,37 +336,25 @@ function renderTimer() {
 
 async function submitForEvaluation() {
   if (!state.sessionId) {
-    setTrainingMessage("没有可提交的会话。", true);
+    el.transcribeStatus.textContent = "没有可提交的会话，请重新开始。";
     return;
   }
 
-  if (state.isRecording) {
-    stopRecording();
-    await waitMs(600);
-  }
-
-  const manualText = el.manualTranscript.value.trim();
-  if (!state.audioBlob && !manualText) {
-    setTrainingMessage("请先录音，或填写回答文本后再提交。", true);
+  const finalText = el.manualTranscript.value.trim();
+  if (!finalText) {
+    el.transcribeStatus.textContent = "⚠️ 请先填写或确认回答内容再提交。";
     return;
   }
 
   el.submitBtn.disabled = true;
-  setTrainingMessage("正在分析，请稍候...");
+  el.reRecordBtn.disabled = true;
+  el.transcribeStatus.textContent = "⏳ AI 评估中，请稍候…";
 
   try {
-    if (state.audioBlob) {
-      const audioBase64 = await blobToBase64(state.audioBlob);
-      await apiPost("/api/session/upload-audio", {
-        sessionId: state.sessionId,
-        audioBase64,
-        mimeType: state.audioBlob.type || "audio/webm"
-      });
-    }
-
+    // 如果用户修改了转写文字，把最新文字同步到 session
     await apiPost("/api/session/transcribe", {
       sessionId: state.sessionId,
-      transcriptText: manualText
+      transcriptText: finalText
     });
 
     const evaluateRes = await apiPost("/api/session/evaluate", {
@@ -322,9 +365,10 @@ async function submitForEvaluation() {
     await loadHistory();
     switchTab("resultTab");
   } catch (error) {
-    setTrainingMessage(error.message || "提交失败，请稍后重试。", true);
+    el.transcribeStatus.textContent = `❌ ${error.message || "提交失败，请稍后重试"}`;
   } finally {
     el.submitBtn.disabled = false;
+    el.reRecordBtn.disabled = false;
   }
 }
 
@@ -440,6 +484,13 @@ function resetTrainingState() {
   state.remainingSeconds = state.durationType === "3min" ? 180 : 60;
   state.isRecording = false;
   el.recordStatus.textContent = "待开始";
+  el.recordStatus.classList.remove("recording");
+  el.recordingPanel.classList.remove("hidden");
+  el.transcriptPanel.classList.add("hidden");
+  el.manualTranscript.value = "";
+  el.manualTranscript.disabled = false;
+  el.recordBtn.disabled = false;
+  el.stopBtn.disabled = true;
   renderTimer();
   setTrainingMessage("");
 }

@@ -79,7 +79,9 @@
 
         <!-- ===== 训练页 ===== -->
         <section id="trainingTab" class="tab">
-          <div class="panel">
+
+          <!-- 录音阶段 -->
+          <div class="panel" id="recordingPanel">
             <p id="trainingTopicText" class="training-topic"></p>
 
             <div class="timer-block">
@@ -91,21 +93,28 @@
               <button id="recordBtn" class="primary-btn full-btn">⏺ 开始录音</button>
             </div>
             <div class="actions" style="margin-top:10px">
-              <button id="stopBtn" class="ghost-btn" disabled style="flex:1">■ 停止</button>
-              <button id="submitBtn" class="accent-btn" disabled style="flex:2">提交评估 →</button>
+              <button id="stopBtn" class="ghost-btn" disabled style="flex:1">■ 停止录音</button>
             </div>
-
-            <label class="manual-label">
-              手动转写（自动转写失败时使用）
-              <textarea
-                id="manualTranscript"
-                rows="4"
-                placeholder="粘贴你的回答文本后再提交评估…"
-              ></textarea>
-            </label>
 
             <p id="trainingMessage" class="hint"></p>
           </div>
+
+          <!-- 转写确认阶段（录音结束后出现） -->
+          <div class="panel hidden" id="transcriptPanel">
+            <p class="section-title" style="margin-top:0">转写结果</p>
+            <p class="transcript-hint">以下是语音识别结果，你可以直接修改后再提交评估：</p>
+            <textarea
+              id="manualTranscript"
+              rows="7"
+              placeholder="正在转写中…"
+            ></textarea>
+            <div class="actions" style="margin-top:14px">
+              <button id="reRecordBtn" class="ghost-btn" style="flex:1">↩ 重新录音</button>
+              <button id="submitBtn" class="accent-btn" style="flex:2">提交评估 →</button>
+            </div>
+            <p id="transcribeStatus" class="hint" style="margin-top:10px"></p>
+          </div>
+
         </section>
 
         <!-- ===== 结果页 ===== -->
