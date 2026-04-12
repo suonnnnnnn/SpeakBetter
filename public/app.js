@@ -225,6 +225,7 @@ async function startRecording() {
       state.audioBlob = new Blob(state.audioChunks, { type: recorder.mimeType || "audio/webm" });
       state.isRecording = false;
       el.recordStatus.textContent = "录音已完成";
+      el.recordStatus.classList.remove("recording");
       el.recordBtn.disabled = false;
       el.stopBtn.disabled = true;
       el.submitBtn.disabled = false;
@@ -238,7 +239,8 @@ async function startRecording() {
     el.recordBtn.disabled = true;
     el.stopBtn.disabled = false;
     el.submitBtn.disabled = true;
-    el.recordStatus.textContent = "录音中";
+    el.recordStatus.textContent = "● 录音中";
+    el.recordStatus.classList.add("recording");
     setTrainingMessage("正在录音，请按“结论 -> 分点 -> 总结”的结构回答。");
     startTimerCountdown();
   } catch (error) {
@@ -344,11 +346,11 @@ function renderResult(report) {
   Object.entries(report.dimension_scores || {}).forEach(([key, value]) => {
     const item = document.createElement("div");
     item.className = "score-item";
-    item.textContent = `${dimensionLabels[key] || key}: ${value}`;
+    item.innerHTML = `<div class="dim-name">${dimensionLabels[key] || key}</div><div class="dim-val">${value}</div>`;
     el.dimensionScores.appendChild(item);
   });
 
-  renderChipList(el.issueTags, report.issue_tags || []);
+  renderIssueChips(el.issueTags, report.issue_tags || []);
   renderTextList(el.detectedIssues, report.detected_issues || []);
   renderTextList(el.suggestions, report.suggestions || []);
 
@@ -396,6 +398,17 @@ function renderHistory(rows) {
       </div>
     `;
     el.historyList.appendChild(card);
+  });
+}
+
+function renderIssueChips(container, items) {
+  container.innerHTML = "";
+  const values = items.length ? items : [];
+  values.forEach((item) => {
+    const chip = document.createElement("span");
+    chip.className = "issue-chip";
+    chip.textContent = item;
+    container.appendChild(chip);
   });
 }
 

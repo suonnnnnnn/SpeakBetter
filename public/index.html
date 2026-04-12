@@ -3,54 +3,55 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>SpeakBetter MVP</title>
+    <title>SpeakBetter</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="app-shell">
+
       <header class="app-header">
-        <div>
-          <p class="eyebrow">AI 口语表达教练</p>
+        <div class="header-brand">
+          <p class="eyebrow">AI 口语教练</p>
           <h1>SpeakBetter</h1>
         </div>
-        <button id="refreshHistoryBtn" class="ghost-btn">刷新记录</button>
+        <button id="refreshHistoryBtn" class="ghost-btn">刷新</button>
       </header>
 
       <main>
+
+        <!-- ===== 首页 ===== -->
         <section id="homeTab" class="tab active">
+
           <div class="panel hero-panel">
             <h2>开始一次高质量表达训练</h2>
-            <p>目标：在短时间内，说得清楚、说得有重点、说得更得体。</p>
+            <p>帮你在短时间内，说得清楚、有重点、更得体。</p>
 
-            <div class="grid-two">
-              <label>
-                训练模式
+            <div class="config-grid">
+              <div class="config-item">
+                <label for="modeSelect">训练模式</label>
                 <select id="modeSelect">
                   <option value="logic">逻辑表达</option>
                   <option value="improv">即兴表达</option>
                   <option value="scenario">场景表达</option>
                 </select>
-              </label>
-              <label>
-                训练时长
+              </div>
+              <div class="config-item">
+                <label for="durationSelect">训练时长</label>
                 <select id="durationSelect">
                   <option value="1min">1 分钟</option>
                   <option value="3min">3 分钟</option>
                 </select>
-              </label>
-            </div>
-
-            <div class="grid-two">
-              <label>
-                难度
+              </div>
+              <div class="config-item">
+                <label for="difficultySelect">难度</label>
                 <select id="difficultySelect">
                   <option value="beginner">初级</option>
                   <option value="intermediate" selected>中级</option>
                   <option value="advanced">高级</option>
                 </select>
-              </label>
-              <label>
-                训练目标
+              </div>
+              <div class="config-item">
+                <label for="targetSkillSelect">训练目标</label>
                 <select id="targetSkillSelect">
                   <option value="logic">逻辑</option>
                   <option value="brevity">简洁</option>
@@ -58,25 +59,27 @@
                   <option value="eq">情商表达</option>
                   <option value="improv">临场反应</option>
                 </select>
-              </label>
+              </div>
             </div>
 
             <div class="actions">
-              <button id="generateTopicBtn" class="primary-btn">生成题目</button>
-              <button id="startSessionBtn" class="accent-btn" disabled>开始训练</button>
+              <button id="generateTopicBtn" class="primary-btn">✦ 生成题目</button>
+              <button id="startSessionBtn" class="accent-btn" disabled>开始训练 →</button>
             </div>
           </div>
 
           <div id="topicCard" class="panel topic-card hidden">
-            <h3 id="topicTitle">题目标题</h3>
+            <div class="topic-badge">✦ 题目已生成</div>
+            <h3 id="topicTitle"></h3>
             <p id="topicContent"></p>
             <div class="chips" id="topicMeta"></div>
           </div>
+
         </section>
 
+        <!-- ===== 训练页 ===== -->
         <section id="trainingTab" class="tab">
           <div class="panel">
-            <h2>训练中</h2>
             <p id="trainingTopicText" class="training-topic"></p>
 
             <div class="timer-block">
@@ -85,17 +88,19 @@
             </div>
 
             <div class="actions">
-              <button id="recordBtn" class="primary-btn">开始录音</button>
-              <button id="stopBtn" class="ghost-btn" disabled>停止录音</button>
-              <button id="submitBtn" class="accent-btn" disabled>提交评估</button>
+              <button id="recordBtn" class="primary-btn full-btn">⏺ 开始录音</button>
+            </div>
+            <div class="actions" style="margin-top:10px">
+              <button id="stopBtn" class="ghost-btn" disabled style="flex:1">■ 停止</button>
+              <button id="submitBtn" class="accent-btn" disabled style="flex:2">提交评估 →</button>
             </div>
 
             <label class="manual-label">
-              手动转写兜底（可选）：
+              手动转写（自动转写失败时使用）
               <textarea
                 id="manualTranscript"
-                rows="5"
-                placeholder="若自动转写失败，可粘贴你的回答文本再提交评估。"
+                rows="4"
+                placeholder="粘贴你的回答文本后再提交评估…"
               ></textarea>
             </label>
 
@@ -103,71 +108,108 @@
           </div>
         </section>
 
+        <!-- ===== 结果页 ===== -->
         <section id="resultTab" class="tab">
           <div class="panel" id="resultPanel">
-            <h2>评估结果</h2>
+
+            <div class="result-header">
+              <h2>评估结果</h2>
+              <div class="score-badge">
+                <span class="score-num" id="overallScore">--</span>
+                <span class="score-label">总分</span>
+              </div>
+            </div>
+
             <p id="resultSummary" class="summary"></p>
 
-            <div class="score-line">
-              <span>总分</span>
-              <strong id="overallScore">--</strong>
-            </div>
-
+            <p class="section-title">维度得分</p>
             <div id="dimensionScores" class="score-grid"></div>
 
-            <h3>关键问题</h3>
+            <p class="section-title">关键问题</p>
             <div id="issueTags" class="chips"></div>
-            <ul id="detectedIssues" class="list"></ul>
+            <ul id="detectedIssues" class="list" style="margin-top:10px"></ul>
 
-            <h3>改进建议</h3>
+            <p class="section-title">改进建议</p>
             <ul id="suggestions" class="list"></ul>
 
-            <h3>思考框架</h3>
-            <p id="frameworkName" class="hint"></p>
-            <ul id="frameworkOutline" class="list"></ul>
-
-            <h3>改写版本</h3>
-            <div class="rewrite-box">
-              <p><strong>精简版：</strong><span id="rewriteConcise"></span></p>
-              <p><strong>高逻辑版：</strong><span id="rewriteLogic"></span></p>
-              <p><strong>高情商版：</strong><span id="rewriteEq"></span></p>
+            <p class="section-title">思考框架</p>
+            <div class="framework-box">
+              <p class="fw-name" id="frameworkName"></p>
+              <ul id="frameworkOutline" class="list"></ul>
             </div>
 
-            <h3>高分示范</h3>
+            <p class="section-title">改写版本</p>
+            <div class="rewrite-box">
+              <div class="rewrite-item">
+                <p class="rw-label">精简版</p>
+                <p id="rewriteConcise"></p>
+              </div>
+              <div class="rewrite-item">
+                <p class="rw-label">高逻辑版</p>
+                <p id="rewriteLogic"></p>
+              </div>
+              <div class="rewrite-item">
+                <p class="rw-label">高情商版</p>
+                <p id="rewriteEq"></p>
+              </div>
+            </div>
+
+            <p class="section-title">高分示范</p>
             <p id="modelAnswer" class="model-answer"></p>
 
-            <div class="actions">
-              <button id="retryBtn" class="primary-btn">再练一次</button>
-              <button id="goHistoryBtn" class="ghost-btn">查看历史</button>
+            <div class="actions" style="margin-top:20px">
+              <button id="retryBtn" class="primary-btn" style="flex:1">再练一次</button>
+              <button id="goHistoryBtn" class="ghost-btn" style="flex:1">查看历史</button>
             </div>
           </div>
         </section>
 
+        <!-- ===== 历史页 ===== -->
         <section id="historyTab" class="tab">
           <div class="panel">
-            <h2>训练历史</h2>
+            <h2 style="font-size:1.1rem;margin-bottom:16px">训练历史</h2>
             <div id="historyList" class="history-list"></div>
           </div>
         </section>
 
+        <!-- ===== 我的 ===== -->
         <section id="profileTab" class="tab">
           <div class="panel">
-            <h2>我的</h2>
-            <p>这是 MVP 版本，当前默认使用本地测试用户。</p>
-            <p class="hint">你可以配置 OPENAI_API_KEY 启用真实 AI 出题与评估能力。</p>
+            <div class="profile-placeholder">
+              <div class="big-icon">🎙</div>
+              <p>这是 MVP 版本，当前使用本地测试用户。</p>
+              <p style="margin-top:8px">配置 <code style="color:var(--primary-light);background:var(--bg-elevated);padding:2px 6px;border-radius:6px">OPENAI_API_KEY</code> 即可启用真实 AI 能力。</p>
+            </div>
           </div>
         </section>
+
       </main>
 
+      <!-- ===== 底部导航 ===== -->
       <nav class="bottom-nav">
-        <button data-tab="homeTab" class="nav-btn active">首页</button>
-        <button data-tab="trainingTab" class="nav-btn">训练</button>
-        <button data-tab="resultTab" class="nav-btn">结果</button>
-        <button data-tab="historyTab" class="nav-btn">历史</button>
-        <button data-tab="profileTab" class="nav-btn">我的</button>
+        <button data-tab="homeTab" class="nav-btn active">
+          <span class="nav-icon">🏠</span>
+          <span>首页</span>
+        </button>
+        <button data-tab="trainingTab" class="nav-btn">
+          <span class="nav-icon">🎙</span>
+          <span>训练</span>
+        </button>
+        <button data-tab="resultTab" class="nav-btn">
+          <span class="nav-icon">📊</span>
+          <span>结果</span>
+        </button>
+        <button data-tab="historyTab" class="nav-btn">
+          <span class="nav-icon">📋</span>
+          <span>历史</span>
+        </button>
+        <button data-tab="profileTab" class="nav-btn">
+          <span class="nav-icon">👤</span>
+          <span>我的</span>
+        </button>
       </nav>
-    </div>
 
+    </div>
     <script src="/app.js" defer></script>
   </body>
 </html>
