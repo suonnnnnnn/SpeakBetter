@@ -7,6 +7,7 @@ const SILICONFLOW_ASR_MODEL = String(process.env.SILICONFLOW_ASR_MODEL || "FunAu
 
 // Demo deployment keeps sessions in memory so the public preview works
 // without a database. This is enough for a shareable MVP URL.
+const BUILD_TIME = "2026-04-12T12-force-redeploy";
 const globalStore = globalThis.__speakbetter_store ?? { sessions: [] };
 globalThis.__speakbetter_store = globalStore;
 
@@ -31,6 +32,7 @@ export default async function handler(req, res) {
         asrModel: SILICONFLOW_ASR_MODEL,
         aiModel: AI_MODEL,
         baseUrl: AI_BASE_URL,
+        buildTime: BUILD_TIME,
         serverTime: new Date().toISOString()
       });
     }
