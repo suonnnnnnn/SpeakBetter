@@ -1,0 +1,7 @@
+﻿.env
+node_modules/
+data/uploads/*
+!data/uploads/.gitkeep
+.vercel
+*.log
+*.pid

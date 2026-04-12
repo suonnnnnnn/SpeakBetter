@@ -1,0 +1,26 @@
+[
+  {
+    "id": "a0581201-e820-435a-87e6-2d434c3e3601",
+    "user_id": "user_demo",
+    "mode_type": "logic",
+    "duration_type": "1min",
+    "topic": {
+      "title": "逻辑表达训练题",
+      "content": "你如何判断一个方案是可执行而不是空想？",
+      "topic_type": "logic",
+      "difficulty": "intermediate",
+      "target_skill": "logic",
+      "suggested_framework": "结论-原因-例子-总结",
+      "recommended_duration": "1min",
+      "training_goal": "逻辑表达能力强化"
+    },
+    "audio_url": "/data/uploads/a0581201-e820-435a-87e6-2d434c3e3601.webm",
+    "mime_type": "audio/webm;codecs=opus",
+    "transcript_text": "",
+    "speech_features": null,
+    "evaluation_report": null,
+    "status": "audio_uploaded",
+    "created_at": "2026-04-07T02:58:39.299Z",
+    "updated_at": "2026-04-07T02:59:01.545Z"
+  }
+]
