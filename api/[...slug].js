@@ -3,6 +3,7 @@ import crypto from "crypto";
 const AI_API_KEY = String(process.env.SILICONFLOW_API_KEY || process.env.OPENAI_API_KEY || "").trim();
 const AI_BASE_URL = String(process.env.SILICONFLOW_BASE_URL || "https://api.siliconflow.cn/v1").trim();
 const AI_MODEL = String(process.env.SILICONFLOW_MODEL || process.env.OPENAI_MODEL || "qwen3.5").trim();
+const SILICONFLOW_ASR_MODEL = String(process.env.SILICONFLOW_ASR_MODEL || "FunAudioLLM/SenseVoiceSmall").trim();
 
 // Demo deployment keeps sessions in memory so the public preview works
 // without a database. This is enough for a shareable MVP URL.
@@ -26,7 +27,7 @@ export default async function handler(req, res) {
       return sendJson(res, 200, {
         ok: true,
         service: "speakbetter-mvp-vercel",
-        openaiEnabled: Boolean(AI_API_KEY),
+        aiEnabled: Boolean(AI_API_KEY),
         serverTime: new Date().toISOString()
       });
     }
@@ -138,15 +139,17 @@ export default async function handler(req, res) {
         return sendJson(res, 404, { ok: false, message: "session 不存在" });
       }
 
+      const audioBase64 = String(body.audioBase64 || body.audio_base64 || "");
       session.audio_url = null;
       session.mime_type = String(body.mimeType || body.mime_type || "audio/webm");
+      session.audio_base64 = audioBase64;
       session.status = "audio_uploaded";
       session.updated_at = new Date().toISOString();
 
       return sendJson(res, 200, {
         ok: true,
         audio_url: null,
-        size: String(body.audioBase64 || body.audio_base64 || "").length
+        size: audioBase64.length
       });
     }
 
@@ -159,11 +162,32 @@ export default async function handler(req, res) {
       }
 
       const manualText = String(body.transcriptText || body.transcript_text || "").trim();
-      const transcriptText = manualText || "未启用在线转写，请粘贴你的回答文本继续评估。";
+      let transcriptText = manualText;
+      let source = "manual";
+
+      if (!transcriptText && session.audio_base64 && AI_API_KEY) {
+        try {
+          transcriptText = await transcribeAudioBase64WithSiliconFlow(
+            session.audio_base64,
+            session.mime_type || "audio/webm",
+            `${session.id}.webm`
+          );
+          source = "siliconflow";
+        } catch {
+          // Fall back to manual text guidance below.
+        }
+      }
+
+      if (!transcriptText) {
+        transcriptText = "未能自动转写，请粘贴你的回答文本继续评估。";
+        source = "fallback";
+      }
+
       const speechFeatures = extractSpeechFeatures(transcriptText);
 
       session.transcript_text = transcriptText;
       session.speech_features = speechFeatures;
+      delete session.audio_base64;
       session.status = "transcribed";
       session.updated_at = new Date().toISOString();
 
@@ -171,7 +195,7 @@ export default async function handler(req, res) {
         ok: true,
         transcript_text: transcriptText,
         speech_features: speechFeatures,
-        source: manualText ? "manual" : "fallback"
+        source
       });
     }
 
@@ -202,7 +226,7 @@ export default async function handler(req, res) {
       session.status = "evaluated";
       session.updated_at = new Date().toISOString();
 
-      return sendJson(res, 200, { ok: true, report, source: aiReport ? "openai" : "fallback" });
+      return sendJson(res, 200, { ok: true, report, source: aiReport ? "siliconflow" : "fallback" });
     }
 
     const resultMatch = pathname.match(/^\/api\/session\/([a-zA-Z0-9\-]+)\/result$/);
@@ -331,6 +355,35 @@ async function evaluateWithAI(payload) {
   }
 
   return normalizeReport(content, payload);
+}
+
+async function transcribeAudioBase64WithSiliconFlow(audioBase64, mimeType, filename) {
+  const cleanBase64 = String(audioBase64 || "").includes(",")
+    ? String(audioBase64).split(",")[1]
+    : String(audioBase64 || "");
+  const bytes = Buffer.from(cleanBase64, "base64");
+  const formData = new FormData();
+  formData.append("file", new Blob([bytes], { type: mimeType || "audio/webm" }), filename || "audio.webm");
+  formData.append("model", SILICONFLOW_ASR_MODEL);
+  formData.append("language", "zh");
+
+  const response = await fetch(`${AI_BASE_URL}/audio/transcriptions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${AI_API_KEY}`
+    },
+    body: formData
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`ASR request failed: ${response.status} ${text}`);
+  }
+
+  const json = await response.json();
+  return String(
+    json.text || json.transcript || json.result || json.data?.text || json.data?.transcript || ""
+  ).trim();
 }
 
 function generateTopicFallback(input) {

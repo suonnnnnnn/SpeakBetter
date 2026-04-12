@@ -4,8 +4,8 @@
 - 题目生成
 - 1/3 分钟训练
 - 录音上传
-- 转写（OpenAI 可选，失败可手动文本兜底）
-- AI 评估（OpenAI 可选 + 本地兜底）
+- 转写（SiliconFlow + FunAudioLLM 可选，失败可手动文本兜底）
+- AI 评估（SiliconFlow 可选 + 本地兜底）
 - 结果页（评分/标签/建议/框架/改写/示范）
 - 历史记录保存
 
@@ -58,7 +58,7 @@ chmod +x start-local.sh
 - 不要再使用 `http://localhost:3000`
 - 如果手机打不开，先确认服务绑定的是 `0.0.0.0`，并允许系统防火墙放行 Node
 
-## 3. 启用 OpenAI（可选）
+## 3. 启用 SiliconFlow（可选）
 
 1. 复制环境变量模板：
 ```bash
@@ -68,9 +68,10 @@ copy .env.example .env
 ```env
 PORT=5173
 HOST=0.0.0.0
-OPENAI_API_KEY=你的key
-OPENAI_MODEL=gpt-4.1-mini
-OPENAI_ASR_MODEL=gpt-4o-mini-transcribe
+SILICONFLOW_API_KEY=你的key
+SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
+SILICONFLOW_MODEL=qwen3.5
+SILICONFLOW_ASR_MODEL=FunAudioLLM/SenseVoiceSmall
 ```
 3. 重启服务。
 

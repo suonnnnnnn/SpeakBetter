@@ -21,7 +21,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const AI_API_KEY = String(process.env.SILICONFLOW_API_KEY || process.env.OPENAI_API_KEY || "").trim();
 const AI_BASE_URL = String(process.env.SILICONFLOW_BASE_URL || "https://api.siliconflow.cn/v1").trim();
 const AI_MODEL = String(process.env.SILICONFLOW_MODEL || process.env.OPENAI_MODEL || "qwen3.5").trim();
-const OPENAI_ASR_MODEL = process.env.OPENAI_ASR_MODEL || "gpt-4o-mini-transcribe";
+const SILICONFLOW_ASR_MODEL = String(process.env.SILICONFLOW_ASR_MODEL || "FunAudioLLM/SenseVoiceSmall").trim();
 
 let sessions = [];
 
@@ -87,7 +87,7 @@ async function handleApi(req, res, pathname, requestUrl) {
     sendJson(res, 200, {
       ok: true,
       service: "speakbetter-mvp",
-      openaiEnabled: Boolean(OPENAI_API_KEY),
+      aiEnabled: Boolean(AI_API_KEY),
       serverTime: new Date().toISOString()
     });
     return;
@@ -252,10 +252,10 @@ async function handleApi(req, res, pathname, requestUrl) {
 
     if (!transcriptText) {
       const audioPath = resolveAudioPath(session.audio_url);
-      if (audioPath && OPENAI_API_KEY) {
+      if (audioPath && AI_API_KEY) {
         try {
-          transcriptText = await transcribeAudioWithOpenAI(audioPath, session.mime_type || "audio/webm");
-          source = "openai";
+          transcriptText = await transcribeAudioWithSiliconFlow(audioPath, session.mime_type || "audio/webm");
+          source = "siliconflow";
         } catch (err) {
           console.warn("[Transcribe fallback]", err instanceof Error ? err.message : err);
         }
@@ -316,7 +316,7 @@ async function handleApi(req, res, pathname, requestUrl) {
 
     await saveSessions();
 
-    sendJson(res, 200, { ok: true, report, source: aiReport ? "openai" : "fallback" });
+    sendJson(res, 200, { ok: true, report, source: aiReport ? "siliconflow" : "fallback" });
     return;
   }
 
@@ -479,14 +479,18 @@ function generateTopicFallback(input) {
   };
 }
 
-async function transcribeAudioWithOpenAI(audioPath, mimeType) {
+async function transcribeAudioWithSiliconFlow(audioPath, mimeType) {
   const data = await fs.readFile(audioPath);
+  return transcribeAudioBufferWithSiliconFlow(data, mimeType, path.basename(audioPath));
+}
+
+async function transcribeAudioBufferWithSiliconFlow(data, mimeType, filename) {
   const formData = new FormData();
-  formData.append("file", new Blob([data], { type: mimeType || "audio/webm" }), path.basename(audioPath));
-  formData.append("model", OPENAI_ASR_MODEL);
+  formData.append("file", new Blob([data], { type: mimeType || "audio/webm" }), filename || "audio.webm");
+  formData.append("model", SILICONFLOW_ASR_MODEL);
   formData.append("language", "zh");
 
-  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+  const response = await fetch(`${AI_BASE_URL}/audio/transcriptions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${AI_API_KEY}`
@@ -500,7 +504,9 @@ async function transcribeAudioWithOpenAI(audioPath, mimeType) {
   }
 
   const json = await response.json();
-  return String(json.text || "").trim();
+  return String(
+    json.text || json.transcript || json.result || json.data?.text || json.data?.transcript || ""
+  ).trim();
 }
 
 async function callOpenAIJson(systemPrompt, inputPayload) {
@@ -523,7 +529,7 @@ async function callOpenAIJson(systemPrompt, inputPayload) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`OpenAI request failed: ${response.status} ${text}`);
+    throw new Error(`AI request failed: ${response.status} ${text}`);
   }
 
   const json = await response.json();
