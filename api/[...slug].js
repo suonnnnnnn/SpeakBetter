@@ -100,7 +100,10 @@ export default async function handler(req, res) {
           : []
       };
 
-      const aiTopic = await generateTopicWithAI(input).catch(() => null);
+      const aiTopic = await generateTopicWithAI(input).catch((error) => {
+        console.error("[AI topic generation failed]", error instanceof Error ? error.message : String(error));
+        return null;
+      });
       const topic = aiTopic || generateTopicFallback(input);
 
       return sendJson(res, 200, {
@@ -278,7 +281,10 @@ export default async function handler(req, res) {
         speech_features: session.speech_features
       };
 
-      const aiReport = await evaluateWithAI(payload).catch(() => null);
+      const aiReport = await evaluateWithAI(payload).catch((error) => {
+        console.error("[AI evaluation failed]", error instanceof Error ? error.message : String(error));
+        return null;
+      });
       const report = aiReport || evaluateFallback(payload);
 
       session.evaluation_report = report;

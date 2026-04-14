@@ -20,7 +20,9 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
 const AI_API_KEY = String(process.env.SILICONFLOW_API_KEY || process.env.OPENAI_API_KEY || "").trim();
 const AI_BASE_URL = String(process.env.SILICONFLOW_BASE_URL || "https://api.siliconflow.cn/v1").trim();
-const AI_MODEL = String(process.env.SILICONFLOW_MODEL || process.env.OPENAI_MODEL || "qwen3.5").trim();
+const AI_MODEL = String(
+  process.env.SILICONFLOW_MODEL || process.env.OPENAI_MODEL || "Qwen/Qwen3.5-35B-A3B"
+).trim();
 const SILICONFLOW_ASR_MODEL = String(process.env.SILICONFLOW_ASR_MODEL || "FunAudioLLM/SenseVoiceSmall").trim();
 
 let sessions = [];
@@ -88,6 +90,9 @@ async function handleApi(req, res, pathname, requestUrl) {
       ok: true,
       service: "speakbetter-mvp",
       aiEnabled: Boolean(AI_API_KEY),
+      aiModel: AI_MODEL,
+      baseUrl: AI_BASE_URL,
+      asrModel: SILICONFLOW_ASR_MODEL,
       serverTime: new Date().toISOString()
     });
     return;
@@ -136,7 +141,10 @@ async function handleApi(req, res, pathname, requestUrl) {
         : []
     };
 
-    const aiTopic = await generateTopicWithAI(input).catch(() => null);
+    const aiTopic = await generateTopicWithAI(input).catch((error) => {
+      console.error("[AI topic generation failed]", error instanceof Error ? error.message : String(error));
+      return null;
+    });
     const topic = aiTopic || generateTopicFallback(input);
 
     sendJson(res, 200, {
@@ -227,12 +235,33 @@ async function handleApi(req, res, pathname, requestUrl) {
     session.status = "audio_uploaded";
     session.updated_at = new Date().toISOString();
 
+    // 上传完成后立即尝试 ASR 转写
+    let transcriptText = "";
+    let transcribeSource = "none";
+    if (AI_API_KEY) {
+      try {
+        transcriptText = await transcribeAudioBufferWithSiliconFlow(buffer, mimeType, filename);
+        transcribeSource = "siliconflow";
+      } catch (err) {
+        console.warn("[Upload ASR fallback]", err instanceof Error ? err.message : err);
+      }
+    }
+
+    // 如果 ASR 成功，顺便写入 session
+    if (transcriptText) {
+      session.transcript_text = transcriptText;
+      session.speech_features = extractSpeechFeatures(transcriptText);
+      session.status = "transcribed";
+    }
+
     await saveSessions();
 
     sendJson(res, 200, {
       ok: true,
       audio_url: session.audio_url,
-      size: buffer.length
+      size: buffer.length,
+      transcript_text: transcriptText,
+      transcribe_source: transcribeSource
     });
     return;
   }
@@ -271,6 +300,7 @@ async function handleApi(req, res, pathname, requestUrl) {
 
     session.transcript_text = transcriptText;
     session.speech_features = speechFeatures;
+    session.input_source = source === "siliconflow" ? "asr" : "manual";
     session.status = "transcribed";
     session.updated_at = new Date().toISOString();
 
@@ -299,15 +329,29 @@ async function handleApi(req, res, pathname, requestUrl) {
       return;
     }
 
+    const isManualInput = (session.input_source || "manual") === "manual";
+    // 文字手动输入时，estimated_pause_seconds 是按标点估算的，不代表真实停顿，不传给 AI 避免误判
+    const speechFeaturesToSend = session.speech_features
+      ? Object.fromEntries(
+          Object.entries(session.speech_features).filter(
+            ([k]) => !(isManualInput && k === "estimated_pause_seconds")
+          )
+        )
+      : null;
+
     const payload = {
       topic: session.topic,
       mode_type: session.mode_type,
       duration_type: session.duration_type,
       transcript_text: session.transcript_text,
-      speech_features: session.speech_features
+      speech_features: speechFeaturesToSend,
+      input_source: session.input_source || "manual"
     };
 
-    const aiReport = await evaluateWithAI(payload).catch(() => null);
+    const aiReport = await evaluateWithAI(payload).catch((error) => {
+      console.error("[AI evaluation failed]", error instanceof Error ? error.message : String(error));
+      return null;
+    });
     const report = aiReport || evaluateFallback(payload);
 
     session.evaluation_report = report;
@@ -623,6 +667,7 @@ function evaluateFallback(payload) {
 
   const thinkingGuide = buildThinkingGuide(payload.topic, payload.mode_type);
   const rewrites = buildRewrites(transcript, payload.mode_type, payload.topic);
+  const sentenceComments = buildSentenceComments(transcript, issueTags, features, payload.mode_type);
 
   return {
     overall_score: overall,
@@ -639,6 +684,7 @@ function evaluateFallback(payload) {
     issue_tags: issueTags,
     strengths,
     suggestions,
+    sentence_comments: sentenceComments,
     thinking_guide: {
       ...thinkingGuide,
       model_answer: buildModelAnswer(payload.topic, payload.duration_type)
@@ -677,6 +723,11 @@ function normalizeReport(raw, payload) {
   merged.strengths = ensureStringArray(merged.strengths, fallback.strengths);
   merged.suggestions = ensureStringArray(merged.suggestions, fallback.suggestions);
   merged.summary = String(merged.summary || fallback.summary);
+
+  // sentence_comments：优先用 AI 返回的，否则用 fallback 规则生成的
+  if (!Array.isArray(merged.sentence_comments) || merged.sentence_comments.length === 0) {
+    merged.sentence_comments = fallback.sentence_comments || [];
+  }
 
   if (!merged.thinking_guide.model_answer) {
     merged.thinking_guide.model_answer = buildModelAnswer(payload.topic, payload.duration_type);
@@ -740,6 +791,70 @@ function buildSummary(score, issueTags) {
     return `当前主要短板是：${issueTags.slice(0, 2).join("、")}。按建议重练可快速提升。`;
   }
   return "建议先从结论先行+三点展开开始，逐步建立稳定表达框架。";
+}
+
+/**
+ * 规则级逐句点评（fallback 时使用）
+ * 按句终标点拆句，对每句做关键词检测，返回有问题的句子及说明
+ */
+function buildSentenceComments(transcript, issueTags, features, modeType) {
+  if (!transcript) return [];
+
+  const sentences = transcript.trim()
+    .split(/(?<=[。！？!?…]+)/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+
+  const fillerWords = ["嗯", "啊", "那个", "然后", "就是", "其实", "这个", "怎么说", "你知道"];
+  const comments = [];
+
+  sentences.forEach((sent) => {
+    const issues = [];
+    const suggestions = [];
+
+    // 检测填充词密度
+    let fillerHit = 0;
+    for (const fw of fillerWords) {
+      const m = sent.match(new RegExp(escapeRegExp(fw), "g"));
+      fillerHit += m ? m.length : 0;
+    }
+    if (fillerHit >= 2) {
+      issues.push(`含 ${fillerHit} 个填充词（如"${fillerWords.filter(fw => sent.includes(fw)).slice(0, 2).join("、")}"），影响干净度`);
+      suggestions.push("停顿代替填充词，先想好再开口");
+    }
+
+    // 检测句子过长（超过60字）
+    if (sent.length > 60) {
+      issues.push("句子偏长，信息密度低");
+      suggestions.push("拆成两句，每句只传达一个核心意思");
+    }
+
+    // 检测重复短语（同一短语出现≥2次）
+    const phraseMatches = sent.match(/(.{3,8})\1+/g);
+    if (phraseMatches && phraseMatches.length > 0) {
+      issues.push(`出现重复表达："${phraseMatches[0].slice(0, 8)}…"`);
+      suggestions.push("删除重复内容，保留最精练的一次表述");
+    }
+
+    // 仅在第一句检测是否开门见山（有无结论词）
+    if (sentences.indexOf(sent) === 0) {
+      const hasOpener = /(我认为|我的结论|我觉得|总结来说|结论是|我会先|我的看法|首先我)/.test(sent);
+      if (!hasOpener && issueTags.includes("结论不先行")) {
+        issues.push("开头未直接给出观点或结论");
+        suggestions.push("停顿代替填充词，先想好再开口；或用【我认为】【我的结论是】等词开场");
+      }
+    }
+
+    if (issues.length > 0) {
+      comments.push({
+        sentence: sent,
+        issue: issues.join("；"),
+        suggestion: suggestions.join("；")
+      });
+    }
+  });
+
+  return comments;
 }
 
 function extractSpeechFeatures(text) {

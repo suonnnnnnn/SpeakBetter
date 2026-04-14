@@ -70,12 +70,16 @@ PORT=5173
 HOST=0.0.0.0
 SILICONFLOW_API_KEY=你的key
 SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
-SILICONFLOW_MODEL=qwen3.5
+SILICONFLOW_MODEL=Qwen/Qwen3.5-35B-A3B
 SILICONFLOW_ASR_MODEL=FunAudioLLM/SenseVoiceSmall
 ```
 3. 重启服务。
 
 未配置 key 也可运行，系统会自动使用本地兜底策略。
+
+排查建议：
+- 先访问 `GET /api/health`，确认返回里的 `aiEnabled`、`aiModel`、`baseUrl` 都是预期值。
+- 如果页面显示 AI 跑不动，先看启动终端日志，服务现在会直接打印题目生成或评估失败的真实错误。
 
 ## 4. 关键 API
 

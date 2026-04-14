@@ -6,6 +6,8 @@ const state = {
   sessionId: null,
   modeType: "logic",
   durationType: "1min",
+  difficulty: "intermediate",
+  targetSkill: "logic",
   mediaRecorder: null,
   mediaStream: null,
   audioChunks: [],
@@ -13,22 +15,29 @@ const state = {
   audioBase64: null,
   timer: null,
   remainingSeconds: 60,
-  isRecording: false
+  isRecording: false,
+  generatedTopics: [],  // 存放本次生成的3道题
+  finalTranscript: ""   // 提交评估时的回答原文
 };
 
 const el = {
   navButtons: Array.from(document.querySelectorAll(".nav-btn")),
   tabs: Array.from(document.querySelectorAll(".tab")),
+  // 兼容隐藏 select（部分逻辑仍读取 value）
   modeSelect: document.getElementById("modeSelect"),
   durationSelect: document.getElementById("durationSelect"),
   difficultySelect: document.getElementById("difficultySelect"),
   targetSkillSelect: document.getElementById("targetSkillSelect"),
-  generateTopicBtn: document.getElementById("generateTopicBtn"),
+  // 新 UI 元素
+  modeGrid: document.getElementById("modeGrid"),
+  durationGroup: document.getElementById("durationGroup"),
+  difficultyGroup: document.getElementById("difficultyGroup"),
+  topicListArea: document.getElementById("topicListArea"),
+  topicListPlaceholder: document.getElementById("topicListPlaceholder"),
+  refreshTopicsBtn: document.getElementById("refreshTopicsBtn"),
   startSessionBtn: document.getElementById("startSessionBtn"),
-  topicCard: document.getElementById("topicCard"),
-  topicTitle: document.getElementById("topicTitle"),
-  topicContent: document.getElementById("topicContent"),
-  topicMeta: document.getElementById("topicMeta"),
+  // 训练台
+  trainingEmpty: document.getElementById("trainingEmpty"),
   trainingTopicText: document.getElementById("trainingTopicText"),
   timerValue: document.getElementById("timerValue"),
   recordStatus: document.getElementById("recordStatus"),
@@ -41,6 +50,7 @@ const el = {
   trainingMessage: document.getElementById("trainingMessage"),
   transcribeStatus: document.getElementById("transcribeStatus"),
   manualTranscript: document.getElementById("manualTranscript"),
+  // 结果
   overallScore: document.getElementById("overallScore"),
   resultSummary: document.getElementById("resultSummary"),
   dimensionScores: document.getElementById("dimensionScores"),
@@ -56,7 +66,20 @@ const el = {
   retryBtn: document.getElementById("retryBtn"),
   goHistoryBtn: document.getElementById("goHistoryBtn"),
   historyList: document.getElementById("historyList"),
-  refreshHistoryBtn: document.getElementById("refreshHistoryBtn")
+  refreshHistoryBtn: document.getElementById("refreshHistoryBtn"),
+  profileNickname: document.getElementById("profileNickname"),
+  profileTotalSessions: document.getElementById("profileTotalSessions"),
+  profileBestScore: document.getElementById("profileBestScore"),
+  profileAvgScore: document.getElementById("profileAvgScore"),
+  profileWeakTags: document.getElementById("profileWeakTags"),
+  avatarWrap: document.getElementById("avatarWrap"),
+  avatarImg: document.getElementById("avatarImg"),
+  avatarFallback: document.getElementById("avatarFallback"),
+  avatarInput: document.getElementById("avatarInput"),
+  editNicknameBtn: document.getElementById("editNicknameBtn"),
+  nicknameEditRow: document.getElementById("nicknameEditRow"),
+  nicknameInput: document.getElementById("nicknameInput"),
+  saveNicknameBtn: document.getElementById("saveNicknameBtn")
 };
 
 init();
@@ -65,6 +88,25 @@ function init() {
   bindEvents();
   renderTimer();
   loadHistory();
+  // 恢复本地保存的头像和昵称
+  const savedAvatar = localStorage.getItem("speakbetter_avatar");
+  if (savedAvatar) applyAvatar(savedAvatar);
+  const savedNickname = localStorage.getItem("speakbetter_nickname");
+  if (savedNickname) el.profileNickname.textContent = savedNickname;
+}
+
+function applyAvatar(dataUrl) {
+  el.avatarImg.src = dataUrl;
+  el.avatarImg.classList.remove("hidden");
+  el.avatarFallback.style.display = "none";
+}
+
+function saveNickname() {
+  const val = el.nicknameInput.value.trim();
+  if (!val) return;
+  localStorage.setItem("speakbetter_nickname", val);
+  el.profileNickname.textContent = val;
+  el.nicknameEditRow.classList.add("hidden");
 }
 
 function bindEvents() {
@@ -72,13 +114,57 @@ function bindEvents() {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
   });
 
-  el.generateTopicBtn.addEventListener("click", generateTopic);
+  // ---- 模式卡片 ----
+  if (el.modeGrid) {
+    el.modeGrid.addEventListener("click", (e) => {
+      const card = e.target.closest(".mode-card");
+      if (!card) return;
+      el.modeGrid.querySelectorAll(".mode-card").forEach((c) => c.classList.remove("active"));
+      card.classList.add("active");
+      state.modeType = card.dataset.mode;
+      el.modeSelect.value = state.modeType;
+      triggerAutoGenerate();
+    });
+  }
+
+  // ---- 时长 chip ----
+  if (el.durationGroup) {
+    el.durationGroup.addEventListener("click", (e) => {
+      const btn = e.target.closest(".chip-btn");
+      if (!btn) return;
+      el.durationGroup.querySelectorAll(".chip-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.durationType = btn.dataset.duration;
+      el.durationSelect.value = state.durationType;
+      triggerAutoGenerate();
+    });
+  }
+
+  // ---- 难度 chip ----
+  if (el.difficultyGroup) {
+    el.difficultyGroup.addEventListener("click", (e) => {
+      const btn = e.target.closest(".chip-btn");
+      if (!btn) return;
+      el.difficultyGroup.querySelectorAll(".chip-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.difficulty = btn.dataset.difficulty;
+      el.difficultySelect.value = state.difficulty;
+      triggerAutoGenerate();
+    });
+  }
+
+  // ---- 换一批 ----
+  if (el.refreshTopicsBtn) {
+    el.refreshTopicsBtn.addEventListener("click", () => generateTopics());
+  }
+
+  // ---- 开始训练 ----
   el.startSessionBtn.addEventListener("click", createSessionAndEnterTraining);
+
   el.recordBtn.addEventListener("click", startRecording);
   el.stopBtn.addEventListener("click", stopRecording);
   el.submitBtn.addEventListener("click", submitForEvaluation);
   el.reRecordBtn.addEventListener("click", () => {
-    // 回到录音阶段
     el.transcriptPanel.classList.add("hidden");
     el.recordingPanel.classList.remove("hidden");
     el.manualTranscript.value = "";
@@ -103,113 +189,194 @@ function bindEvents() {
   });
   el.refreshHistoryBtn.addEventListener("click", loadHistory);
 
+  // 头像
+  el.avatarWrap.addEventListener("click", () => el.avatarInput.click());
+  el.avatarInput.addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      localStorage.setItem("speakbetter_avatar", dataUrl);
+      applyAvatar(dataUrl);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  });
+
+  // 昵称
+  el.editNicknameBtn.addEventListener("click", () => {
+    el.nicknameInput.value = el.profileNickname.textContent;
+    el.nicknameEditRow.classList.remove("hidden");
+    el.nicknameInput.focus();
+    el.nicknameInput.select();
+  });
+  el.saveNicknameBtn.addEventListener("click", saveNickname);
+  el.nicknameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") saveNickname();
+    if (e.key === "Escape") el.nicknameEditRow.classList.add("hidden");
+  });
+
   el.historyList.addEventListener("click", async (event) => {
     const target = event.target;
-    if (!(target instanceof HTMLElement) || !target.matches("button[data-session-id]")) {
-      return;
-    }
-
+    if (!(target instanceof HTMLElement) || !target.matches("button[data-session-id]")) return;
     const sessionId = target.dataset.sessionId;
-    if (!sessionId) {
-      return;
-    }
-
+    if (!sessionId) return;
     try {
       const data = await apiGet(`/api/session/${sessionId}/result`);
-      if (!data.report) {
-        alert("该记录尚未完成评估。");
-        return;
-      }
+      if (!data.report) { alert("该记录尚未完成评估。"); return; }
       renderResult(data.report);
       switchTab("resultTab");
     } catch (error) {
       alert(error.message || "加载结果失败");
     }
   });
+
+  // hamburger 菜单
+  const hamburgerBtn = document.getElementById("hamburgerBtn");
+  const sidebar = document.getElementById("sidebar");
+  const overlay = document.getElementById("sidebarOverlay");
+
+  function openMobileSidebar() {
+    if (!sidebar || !overlay) return;
+    sidebar.classList.add("mobile-open");
+    overlay.style.display = "block";
+    document.body.style.overflow = "hidden";
+  }
+  function closeMobileSidebar() {
+    if (!sidebar || !overlay) return;
+    sidebar.classList.remove("mobile-open");
+    overlay.style.display = "";
+    document.body.style.overflow = "";
+  }
+  if (hamburgerBtn) hamburgerBtn.addEventListener("click", openMobileSidebar);
+  if (overlay) overlay.addEventListener("click", closeMobileSidebar);
+  if (sidebar) {
+    sidebar.querySelectorAll(".nav-btn").forEach((btn) => {
+      btn.addEventListener("click", () => { if (window.innerWidth <= 600) closeMobileSidebar(); });
+    });
+  }
+}
+
+// 防抖：选完后 300ms 触发（避免快速切换重复请求）
+let _autoGenTimer = null;
+function triggerAutoGenerate() {
+  clearTimeout(_autoGenTimer);
+  _autoGenTimer = setTimeout(() => generateTopics(), 300);
+}
+
+// 生成3道题并渲染可选列表
+async function generateTopics() {
+  // 显示 loading 状态
+  el.topicListPlaceholder && (el.topicListPlaceholder.style.display = "none");
+  el.topicListArea.innerHTML = `<div class="topics-loading"><span class="loading-spinner"></span>AI 正在生成题目…</div>`;
+  if (el.refreshTopicsBtn) el.refreshTopicsBtn.style.display = "none";
+  state.topic = null;
+  el.startSessionBtn.disabled = true;
+
+  const payload = {
+    modeType: state.modeType,
+    durationType: state.durationType,
+    difficulty: state.difficulty || "intermediate",
+    targetSkill: state.targetSkill || "logic",
+    weaknessTags: [],
+    count: 3
+  };
+
+  try {
+    // 并发生成3题（后端 generate 每次生成1题，并发3次）
+    const results = await Promise.all([
+      apiPost("/api/topic/generate", payload),
+      apiPost("/api/topic/generate", payload),
+      apiPost("/api/topic/generate", payload)
+    ]);
+    state.generatedTopics = results.map((r) => r.topic);
+    renderTopicList(state.generatedTopics);
+  } catch (err) {
+    el.topicListArea.innerHTML = `<div class="topics-error">生成失败：${escapeHtml(err.message || "请检查网络后重试")}<br><button class="ghost-btn" style="margin-top:12px" onclick="generateTopics()">重试</button></div>`;
+  } finally {
+    if (el.refreshTopicsBtn) el.refreshTopicsBtn.style.display = "";
+  }
+}
+
+function renderTopicList(topics) {
+  el.topicListArea.innerHTML = "";
+  topics.forEach((topic, idx) => {
+    const item = document.createElement("div");
+    item.className = "topic-option";
+    item.dataset.idx = idx;
+    item.innerHTML = `
+      <div class="topic-option-num">${idx + 1}</div>
+      <div class="topic-option-body">
+        <p class="topic-option-text">${escapeHtml(topic.content)}</p>
+        <div class="topic-option-meta">
+          <span>${escapeHtml(topic.suggested_framework || "")}</span>
+          <span>${escapeHtml(topic.recommended_duration || state.durationType)}</span>
+        </div>
+        <button class="topic-select-btn" data-idx="${idx}">选这道题</button>
+      </div>
+      <div class="topic-option-check">✓</div>
+    `;
+    // 仅按钮触发选中，卡片本身不响应点击
+    item.querySelector(".topic-select-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      selectTopic(idx);
+    });
+    el.topicListArea.appendChild(item);
+  });
+}
+
+function selectTopic(idx) {
+  el.topicListArea.querySelectorAll(".topic-option").forEach((item, i) => {
+    item.classList.toggle("selected", i === idx);
+    // 选中态下按钮文案改为"已选择 ✓"，其余恢复
+    const btn = item.querySelector(".topic-select-btn");
+    if (btn) {
+      btn.textContent = i === idx ? "已选择 ✓" : "选这道题";
+      btn.classList.toggle("topic-select-btn--chosen", i === idx);
+    }
+  });
+  state.topic = state.generatedTopics[idx];
+  state.modeType = state.topic.topic_type || state.modeType;
+  el.startSessionBtn.disabled = false;
 }
 
 function switchTab(tabId) {
   el.tabs.forEach((tab) => tab.classList.toggle("active", tab.id === tabId));
   el.navButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === tabId));
-}
-
-async function generateTopic() {
-  const payload = {
-    modeType: el.modeSelect.value,
-    durationType: el.durationSelect.value,
-    difficulty: el.difficultySelect.value,
-    targetSkill: el.targetSkillSelect.value,
-    weaknessTags: []
+  const titleMap = {
+    homeTab: "开始训练", trainingTab: "训练台",
+    resultTab: "评估结果", historyTab: "训练历史", profileTab: "我的"
   };
-
-  state.modeType = payload.modeType;
-  state.durationType = payload.durationType;
-  el.generateTopicBtn.disabled = true;
-  el.generateTopicBtn.textContent = "生成中...";
-
-  try {
-    const data = await apiPost("/api/topic/generate", payload);
-    state.topic = data.topic;
-    renderTopicCard(data.topic);
-    el.startSessionBtn.disabled = false;
-  } catch (error) {
-    alert(error.message || "题目生成失败");
-  } finally {
-    el.generateTopicBtn.disabled = false;
-    el.generateTopicBtn.textContent = "生成题目";
-  }
-}
-
-function renderTopicCard(topic) {
-  el.topicTitle.textContent = topic.title;
-  el.topicContent.textContent = topic.content;
-  el.topicMeta.innerHTML = "";
-
-  [
-    typeLabel(topic.topic_type),
-    difficultyLabel(topic.difficulty),
-    topic.recommended_duration,
-    topic.suggested_framework
-  ].forEach((meta) => {
-    const chip = document.createElement("span");
-    chip.textContent = meta;
-    el.topicMeta.appendChild(chip);
-  });
-
-  el.topicCard.classList.remove("hidden");
+  const titleEl = document.getElementById("topBarTitle");
+  if (titleEl) titleEl.textContent = titleMap[tabId] || "";
+  if (tabId === "profileTab") loadProfile();
 }
 
 async function createSessionAndEnterTraining() {
-  if (!state.topic) {
-    alert("请先生成题目");
-    return;
-  }
-
+  if (!state.topic) { alert("请先选择一道题目"); return; }
   try {
     const data = await apiPost("/api/session/create", {
-      userId: state.userId,
-      modeType: state.modeType,
-      durationType: state.durationType,
-      topic: state.topic
+      userId: state.userId, modeType: state.modeType,
+      durationType: state.durationType, topic: state.topic
     });
-
     state.sessionId = data.session.id;
-    state.audioBlob = null;
-    state.audioChunks = [];
+    state.audioBlob = null; state.audioChunks = [];
     state.remainingSeconds = state.durationType === "3min" ? 180 : 60;
     el.trainingTopicText.textContent = state.topic.content;
     el.manualTranscript.value = "";
     el.recordStatus.textContent = "待开始";
-    el.recordBtn.disabled = false;
-    el.stopBtn.disabled = true;
+    el.recordBtn.disabled = false; el.stopBtn.disabled = true;
     el.submitBtn.disabled = false;
-    setTrainingMessage("会话已创建，点击“开始录音”进入训练。");
+    setTrainingMessage("会话已创建，点击【开始录音】进入训练。");
     renderTimer();
+    el.trainingEmpty.classList.add("hidden");
+    el.recordingPanel.classList.remove("hidden");
+    el.transcriptPanel.classList.add("hidden");
     switchTab("trainingTab");
-  } catch (error) {
-    alert(error.message || "创建训练会话失败");
-  }
+  } catch (error) { alert(error.message || "创建训练会话失败"); }
 }
+
 
 async function startRecording() {
   if (!state.sessionId) {
@@ -352,6 +519,9 @@ async function submitForEvaluation() {
   el.reRecordBtn.disabled = true;
   el.transcribeStatus.textContent = "⏳ AI 评估中，请稍候…";
 
+  // 保存原文供结果页逐句展示
+  state.finalTranscript = finalText;
+
   try {
     // 把用户最终确认/修改的文字同步给后端，并带上备用音频
     await apiPost("/api/session/transcribe", {
@@ -411,6 +581,69 @@ function renderResult(report) {
   el.rewriteLogic.textContent = rewrites.high_logic || "";
   el.rewriteEq.textContent = rewrites.high_eq || "";
   el.modelAnswer.textContent = guide.model_answer || "";
+
+  // 逐句点评
+  renderSentenceReview(state.finalTranscript, report.sentence_comments || []);
+}
+
+// 逐句点评渲染
+function renderSentenceReview(transcript, sentenceComments) {
+  const container = document.getElementById("sentenceReview");
+  if (!container) return;
+  container.innerHTML = "";
+
+  if (!transcript) {
+    container.innerHTML = '<p class="hint">暂无回答内容</p>';
+    return;
+  }
+
+  // 按中英文句终标点拆句
+  const raw = transcript.trim();
+  const sentences = raw
+    .split(/(?<=[。！？!?…]+)/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  if (sentences.length === 0) {
+    container.innerHTML = `<p class="sr-sentence sr-ok">${escapeHtml(raw)}</p>`;
+    return;
+  }
+
+  // 建立句子→点评的映射（后端精确匹配）
+  const commentMap = new Map();
+  sentenceComments.forEach((c) => {
+    if (c.sentence) commentMap.set(c.sentence.trim(), c);
+  });
+
+  sentences.forEach((sent, idx) => {
+    const comment = commentMap.get(sent);
+    const row = document.createElement("div");
+    row.className = comment ? "sr-row sr-row--issue" : "sr-row sr-row--ok";
+
+    const sentEl = document.createElement("p");
+    sentEl.className = "sr-sentence";
+    sentEl.textContent = `${idx + 1}. ${sent}`;
+    row.appendChild(sentEl);
+
+    if (comment) {
+      // 问题说明
+      if (comment.issue) {
+        const issueEl = document.createElement("div");
+        issueEl.className = "sr-issue";
+        issueEl.innerHTML = `<span class="sr-issue-icon">⚠</span>${escapeHtml(comment.issue)}`;
+        row.appendChild(issueEl);
+      }
+      // 改进建议
+      if (comment.suggestion) {
+        const sugEl = document.createElement("div");
+        sugEl.className = "sr-suggestion";
+        sugEl.innerHTML = `<span class="sr-sug-icon">💡</span>可以说：<em>${escapeHtml(comment.suggestion)}</em>`;
+        row.appendChild(sugEl);
+      }
+    }
+
+    container.appendChild(row);
+  });
 }
 
 async function loadHistory() {
@@ -419,6 +652,52 @@ async function loadHistory() {
     renderHistory(data.sessions || []);
   } catch {
     renderHistory([]);
+  }
+}
+
+async function loadProfile() {
+  try {
+    const data = await apiGet(`/api/session/history?userId=${encodeURIComponent(state.userId)}&limit=200`);
+    renderProfile(data.sessions || []);
+  } catch {
+    renderProfile([]);
+  }
+}
+
+function renderProfile(sessions) {
+  const evaluated = sessions.filter((s) => s.overall_score !== null && s.overall_score !== undefined);
+  const total = sessions.length;
+  const best = evaluated.length ? Math.max(...evaluated.map((s) => s.overall_score)) : null;
+  const avg = evaluated.length
+    ? Math.round(evaluated.reduce((sum, s) => sum + s.overall_score, 0) / evaluated.length)
+    : null;
+
+  el.profileTotalSessions.textContent = total > 0 ? `${total} 次` : "--";
+  el.profileBestScore.textContent = best !== null ? String(best) : "--";
+  el.profileAvgScore.textContent = avg !== null ? String(avg) : "--";
+
+  // 统计最常出现的薄弱项 tag（取 top 3）
+  const tagCount = {};
+  sessions.forEach((s) => {
+    (s.issue_tags || []).forEach((tag) => {
+      tagCount[tag] = (tagCount[tag] || 0) + 1;
+    });
+  });
+  const topTags = Object.entries(tagCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([tag]) => tag);
+
+  el.profileWeakTags.innerHTML = "";
+  if (topTags.length) {
+    topTags.forEach((tag) => {
+      const chip = document.createElement("span");
+      chip.className = "issue-chip";
+      chip.textContent = tag;
+      el.profileWeakTags.appendChild(chip);
+    });
+  } else {
+    el.profileWeakTags.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem">暂无数据，完成训练后查看</span>';
   }
 }
 
@@ -432,17 +711,30 @@ function renderHistory(rows) {
   rows.forEach((row) => {
     const card = document.createElement("div");
     card.className = "history-item";
-    const time = new Date(row.created_at).toLocaleString();
+    const time = new Date(row.created_at).toLocaleString("zh-CN", {
+      month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit"
+    });
     const score = row.overall_score ?? "--";
+    const scoreColor = row.overall_score >= 80
+      ? "color:#16a34a;background:var(--green-dim);border-color:rgba(34,197,94,0.20)"
+      : row.overall_score >= 60
+      ? "color:#d97706;background:#fef3c7;border-color:rgba(245,158,11,0.25)"
+      : "color:var(--text-2);background:var(--bg-muted);border-color:var(--border)";
+
+    const tagsHtml = (row.issue_tags || []).slice(0, 3)
+      .map((tag) => `<span>${escapeHtml(tag)}</span>`).join("");
+
     card.innerHTML = `
       <h4>${escapeHtml(row.topic_title || "训练记录")}</h4>
-      <p>模式：${typeLabel(row.mode_type)} | 时长：${row.duration_type} | 分数：${score}</p>
-      <p>时间：${escapeHtml(time)}</p>
-      <div class="chips">
-        ${(row.issue_tags || []).slice(0, 3).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
-      </div>
-      <div class="actions">
-        <button class="ghost-btn" data-session-id="${row.id}">查看详情</button>
+      <p class="history-meta">
+        ${typeLabel(row.mode_type)} · ${durationLabel(row.duration_type)}
+      </p>
+      <p class="history-time">${escapeHtml(time)}</p>
+      <div class="history-tags">${tagsHtml}</div>
+      <div class="history-score-pill" style="${scoreColor}">${score}${typeof row.overall_score === "number" ? " 分" : ""}</div>
+      <div class="history-actions">
+        <button class="ghost-btn" style="padding:7px 16px;font-size:0.82rem" data-session-id="${row.id}">详情 →</button>
       </div>
     `;
     el.historyList.appendChild(card);
@@ -506,35 +798,27 @@ function setTrainingMessage(message, isError = false) {
 }
 
 async function apiGet(url) {
-  try {
-    const response = await fetch(url);
-    const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data.message || "请求失败");
-    }
-    return data;
-  } catch (error) {
-    return demoApiGet(url, error);
+  const response = await fetch(url);
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    throw new Error(data.message || "请求失败");
   }
+  return data;
 }
 
 async function apiPost(url, body) {
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body || {})
-    });
-    const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data.message || "请求失败");
-    }
-    return data;
-  } catch (error) {
-    return demoApiPost(url, body || {}, error);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body || {})
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    throw new Error(data.message || "请求失败");
   }
+  return data;
 }
 
 function demoApiGet(url, originalError) {
@@ -859,6 +1143,11 @@ function typeLabel(type) {
     roleplay: "角色扮演"
   };
   return map[type] || type;
+}
+
+function durationLabel(dur) {
+  const map = { "1min": "1 分钟", "3min": "3 分钟", "5min": "5 分钟" };
+  return map[dur] || dur || "--";
 }
 
 function difficultyLabel(level) {

@@ -5,7 +5,12 @@
 - mode_type
 - duration_type
 - transcript_text
-- speech_features (filler_count, filler_ratio, repetition_ratio, estimated_pause)
+- input_source: "manual"（用户手动文字输入）或 "asr"（语音识别）
+- speech_features (filler_count, filler_ratio, repetition_ratio；仅 asr 时含 estimated_pause_seconds)
+
+重要规则：
+- 当 input_source 为 "manual" 时，transcript_text 是用户打字输入，不存在真实的停顿、语速、语音流畅度等信息。此时禁止评估停顿时间、语速、犹豫停顿等语音相关维度，speaking 分数应仅基于文字内容的口语化程度判断。
+- 当 input_source 为 "asr" 时，可参考 speech_features 中的所有字段。
 
 输出要求：
 1) 只输出 JSON。
@@ -32,6 +37,13 @@
     "outline": [""],
     "model_answer": ""
   },
+  "sentence_comments": [
+    {
+      "sentence": "原句文本（必须与 transcript_text 中的完整句子完全一致）",
+      "issue": "该句存在的问题（用一句话说明）",
+      "suggestion": "改进建议或示例（用一句话给出可直接模仿的说法）"
+    }
+  ],
   "rewrites": {
     "concise": "",
     "high_logic": "",
@@ -39,6 +51,7 @@
   },
   "summary": ""
 }
-3) 建议必须可执行，可直接模仿。
-4) 输出不能全是批评，必须有优点。
-5) 若场景表达模式，必须考虑得体度和关系边界。
+3) sentence_comments 只列出有明确问题的句子（无问题句不要出现）。每个问题句给出 sentence/issue/suggestion 三个字段，sentence 必须与原文完全一致。
+4) 建议必须可执行，可直接模仿。
+5) 输出不能全是批评，必须有优点。
+6) 若场景表达模式，必须考虑得体度和关系边界。
