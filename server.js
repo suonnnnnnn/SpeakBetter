@@ -238,12 +238,14 @@ async function handleApi(req, res, pathname, requestUrl) {
     // 上传完成后立即尝试 ASR 转写
     let transcriptText = "";
     let transcribeSource = "none";
+    let asrError = "";
     if (AI_API_KEY) {
       try {
         transcriptText = await transcribeAudioBufferWithSiliconFlow(buffer, mimeType, filename);
         transcribeSource = "siliconflow";
       } catch (err) {
-        console.warn("[Upload ASR fallback]", err instanceof Error ? err.message : err);
+        asrError = err instanceof Error ? err.message : String(err);
+        console.warn("[Upload ASR fallback]", asrError);
       }
     }
 
@@ -251,6 +253,7 @@ async function handleApi(req, res, pathname, requestUrl) {
     if (transcriptText) {
       session.transcript_text = transcriptText;
       session.speech_features = extractSpeechFeatures(transcriptText);
+      session.input_source = "asr";
       session.status = "transcribed";
     }
 
@@ -261,7 +264,8 @@ async function handleApi(req, res, pathname, requestUrl) {
       audio_url: session.audio_url,
       size: buffer.length,
       transcript_text: transcriptText,
-      transcribe_source: transcribeSource
+      transcribe_source: transcribeSource,
+      asr_error: asrError
     });
     return;
   }

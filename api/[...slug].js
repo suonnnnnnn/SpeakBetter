@@ -175,17 +175,19 @@ export default async function handler(req, res) {
       // 上传的同时直接转写，避免跨 Serverless 实例丢失音频数据
       let transcriptText = "";
       let transcribeSource = "pending";
+      let asrError = "";
 
       if (audioBase64 && AI_API_KEY) {
         try {
           transcriptText = await transcribeAudioBase64WithSiliconFlow(
             audioBase64,
             mimeType,
-            `${session.id}.webm`
+            `${session.id}${extensionFromMime(mimeType)}`
           );
           transcribeSource = "siliconflow";
         } catch (err) {
-          console.error("[ASR error]", err?.message || err);
+          asrError = err?.message || String(err || "");
+          console.error("[ASR error]", asrError);
           transcribeSource = "asr_failed";
         }
       }
@@ -193,6 +195,7 @@ export default async function handler(req, res) {
       if (transcriptText) {
         session.transcript_text = transcriptText;
         session.speech_features = extractSpeechFeatures(transcriptText);
+        session.input_source = "asr";
         session.status = "transcribed";
       } else {
         session.status = "audio_uploaded";
@@ -205,6 +208,7 @@ export default async function handler(req, res) {
         ok: true,
         transcript_text: transcriptText,
         transcribe_source: transcribeSource,
+        asr_error: asrError,
         size: audioBase64.length
       });
     }
@@ -228,7 +232,7 @@ export default async function handler(req, res) {
       if (!transcriptText && audioBase64 && AI_API_KEY) {
         try {
           transcriptText = await transcribeAudioBase64WithSiliconFlow(
-            audioBase64, mimeType, `${session.id}.webm`
+            audioBase64, mimeType, `${session.id}${extensionFromMime(mimeType)}`
           );
           source = "siliconflow";
         } catch (err) {
@@ -250,6 +254,7 @@ export default async function handler(req, res) {
       const speechFeatures = extractSpeechFeatures(transcriptText);
       session.transcript_text = transcriptText;
       session.speech_features = speechFeatures;
+      session.input_source = source === "siliconflow" || source === "cached" ? "asr" : "manual";
       session.status = "transcribed";
       session.updated_at = new Date().toISOString();
 
@@ -273,12 +278,22 @@ export default async function handler(req, res) {
         return sendJson(res, 400, { ok: false, message: "请先完成转写" });
       }
 
+      const isManualInput = (session.input_source || "manual") === "manual";
+      const speechFeaturesToSend = session.speech_features
+        ? Object.fromEntries(
+            Object.entries(session.speech_features).filter(
+              ([k]) => !(isManualInput && k === "estimated_pause_seconds")
+            )
+          )
+        : null;
+
       const payload = {
         topic: session.topic,
         mode_type: session.mode_type,
         duration_type: session.duration_type,
         transcript_text: session.transcript_text,
-        speech_features: session.speech_features
+        speech_features: speechFeaturesToSend,
+        input_source: session.input_source || "manual"
       };
 
       const aiReport = await evaluateWithAI(payload).catch((error) => {
@@ -715,6 +730,21 @@ function extractSpeechFeatures(text) {
     repetition_ratio: Number(repetitionRatio.toFixed(4)),
     estimated_pause_seconds: estimatedPause
   };
+}
+
+function extensionFromMime(mimeType) {
+  const map = {
+    "audio/webm": ".webm",
+    "audio/wav": ".wav",
+    "audio/wave": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/mp4": ".m4a",
+    "audio/aac": ".aac",
+    "audio/ogg": ".ogg"
+  };
+  return map[String(mimeType || "").toLowerCase()] || ".webm";
 }
 
 function findSessionById(id) {

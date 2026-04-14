@@ -1,7 +1,10 @@
 const DEMO_STORAGE_KEY = "speakbetter_demo_sessions_v1";
+const AUTH_STORAGE_KEY = "speakbetter_auth_v1";
 
 const state = {
   userId: "user_demo",
+  authToken: "",
+  userEmail: "",
   topic: null,
   sessionId: null,
   modeType: "logic",
@@ -16,6 +19,9 @@ const state = {
   timer: null,
   remainingSeconds: 60,
   isRecording: false,
+  speechRecognition: null,
+  speechRecognitionText: "",
+  speechRecognitionEnabled: false,
   generatedTopics: [],  // 存放本次生成的3道题
   finalTranscript: ""   // 提交评估时的回答原文
 };
@@ -36,8 +42,8 @@ const el = {
   topicListPlaceholder: document.getElementById("topicListPlaceholder"),
   refreshTopicsBtn: document.getElementById("refreshTopicsBtn"),
   startSessionBtn: document.getElementById("startSessionBtn"),
-  // 训练台
-  trainingEmpty: document.getElementById("trainingEmpty"),
+  trainingFlow: document.getElementById("trainingFlow"),
+  backToTopicBtn: document.getElementById("backToTopicBtn"),
   trainingTopicText: document.getElementById("trainingTopicText"),
   timerValue: document.getElementById("timerValue"),
   recordStatus: document.getElementById("recordStatus"),
@@ -67,6 +73,10 @@ const el = {
   goHistoryBtn: document.getElementById("goHistoryBtn"),
   historyList: document.getElementById("historyList"),
   refreshHistoryBtn: document.getElementById("refreshHistoryBtn"),
+  loginStatusText: document.getElementById("loginStatusText"),
+  loginEmailInput: document.getElementById("loginEmailInput"),
+  loginBtn: document.getElementById("loginBtn"),
+  logoutBtn: document.getElementById("logoutBtn"),
   profileNickname: document.getElementById("profileNickname"),
   profileTotalSessions: document.getElementById("profileTotalSessions"),
   profileBestScore: document.getElementById("profileBestScore"),
@@ -85,9 +95,12 @@ const el = {
 init();
 
 function init() {
+  restoreAuth();
+  initSpeechRecognition();
   bindEvents();
   renderTimer();
   loadHistory();
+  updateLoginUi();
   // 恢复本地保存的头像和昵称
   const savedAvatar = localStorage.getItem("speakbetter_avatar");
   if (savedAvatar) applyAvatar(savedAvatar);
@@ -107,6 +120,90 @@ function saveNickname() {
   localStorage.setItem("speakbetter_nickname", val);
   el.profileNickname.textContent = val;
   el.nicknameEditRow.classList.add("hidden");
+}
+
+function restoreAuth() {
+  try {
+    const auth = JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || "{}");
+    if (auth && auth.userId) {
+      state.userId = String(auth.userId);
+      state.authToken = String(auth.token || "");
+      state.userEmail = String(auth.email || "");
+    }
+  } catch {
+    state.userId = "user_demo";
+  }
+}
+
+function persistAuth() {
+  localStorage.setItem(
+    AUTH_STORAGE_KEY,
+    JSON.stringify({
+      userId: state.userId,
+      token: state.authToken,
+      email: state.userEmail
+    })
+  );
+}
+
+function clearAuth() {
+  state.userId = "user_demo";
+  state.authToken = "";
+  state.userEmail = "";
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+function updateLoginUi() {
+  const loggedIn = Boolean(state.userId && state.userId !== "user_demo");
+  if (el.loginStatusText) {
+    el.loginStatusText.textContent = loggedIn
+      ? `已登录：${state.userEmail || state.userId}（训练历史将按此账号保存）`
+      : "未登录，将使用游客身份保存本机记录。";
+  }
+  if (el.loginEmailInput) {
+    el.loginEmailInput.value = loggedIn ? state.userEmail : "";
+  }
+  if (el.loginBtn) {
+    el.loginBtn.textContent = loggedIn ? "重新登录" : "登录";
+  }
+}
+
+async function loginByEmail() {
+  const email = String(el.loginEmailInput?.value || "").trim();
+  if (!email || !email.includes("@")) {
+    alert("请输入有效邮箱后再登录");
+    return;
+  }
+
+  if (el.loginBtn) el.loginBtn.disabled = true;
+  try {
+    const data = await apiPost("/api/auth/login", { email });
+    if (!data.user?.id) throw new Error("登录失败，请稍后重试");
+    state.userId = String(data.user.id);
+    state.authToken = String(data.token || "");
+    state.userEmail = String(data.user.email || email);
+    persistAuth();
+    updateLoginUi();
+    setTrainingMessage("登录成功，训练记录将保存到当前账号。");
+    await loadHistory();
+    if (document.getElementById("profileTab")?.classList.contains("active")) {
+      await loadProfile();
+    }
+  } catch (error) {
+    alert(error.message || "登录失败");
+  } finally {
+    if (el.loginBtn) el.loginBtn.disabled = false;
+  }
+}
+
+async function logoutAccount() {
+  clearAuth();
+  updateLoginUi();
+  await loadHistory();
+  if (document.getElementById("profileTab")?.classList.contains("active")) {
+    await loadProfile();
+  }
+  setTrainingMessage("已退出登录，当前为游客模式。");
 }
 
 function bindEvents() {
@@ -160,6 +257,12 @@ function bindEvents() {
 
   // ---- 开始训练 ----
   el.startSessionBtn.addEventListener("click", createSessionAndEnterTraining);
+  el.backToTopicBtn?.addEventListener("click", () => {
+    resetTrainingState();
+    el.trainingFlow?.classList.add("hidden");
+    setTrainingMessage("已返回选题，你可以换题后再开始。");
+    document.getElementById("topicListSection")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 
   el.recordBtn.addEventListener("click", startRecording);
   el.stopBtn.addEventListener("click", stopRecording);
@@ -181,6 +284,7 @@ function bindEvents() {
 
   el.retryBtn.addEventListener("click", () => {
     resetTrainingState();
+    el.trainingFlow?.classList.add("hidden");
     switchTab("homeTab");
   });
   el.goHistoryBtn.addEventListener("click", () => {
@@ -188,6 +292,11 @@ function bindEvents() {
     switchTab("historyTab");
   });
   el.refreshHistoryBtn.addEventListener("click", loadHistory);
+  el.loginBtn?.addEventListener("click", loginByEmail);
+  el.logoutBtn?.addEventListener("click", logoutAccount);
+  el.loginEmailInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") loginByEmail();
+  });
 
   // 头像
   el.avatarWrap.addEventListener("click", () => el.avatarInput.click());
@@ -263,6 +372,57 @@ let _autoGenTimer = null;
 function triggerAutoGenerate() {
   clearTimeout(_autoGenTimer);
   _autoGenTimer = setTimeout(() => generateTopics(), 300);
+}
+
+function initSpeechRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    state.speechRecognitionEnabled = false;
+    return;
+  }
+  const recognition = new SR();
+  recognition.lang = "zh-CN";
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+
+  recognition.onresult = (event) => {
+    let finalText = "";
+    for (let i = 0; i < event.results.length; i += 1) {
+      const result = event.results[i];
+      if (result.isFinal && result[0]?.transcript) {
+        finalText += result[0].transcript;
+      }
+    }
+    if (finalText) {
+      state.speechRecognitionText = `${state.speechRecognitionText}${finalText}`.trim();
+    }
+  };
+
+  recognition.onerror = () => {
+    // 浏览器识别仅做兜底，不在录音过程中打断主流程
+  };
+
+  state.speechRecognition = recognition;
+  state.speechRecognitionEnabled = true;
+}
+
+function startBrowserSpeechRecognition() {
+  if (!state.speechRecognitionEnabled || !state.speechRecognition) return;
+  try {
+    state.speechRecognition.start();
+  } catch {
+    // 某些浏览器重复 start 会抛错，忽略即可
+  }
+}
+
+function stopBrowserSpeechRecognition() {
+  if (!state.speechRecognitionEnabled || !state.speechRecognition) return;
+  try {
+    state.speechRecognition.stop();
+  } catch {
+    // noop
+  }
 }
 
 // 生成3道题并渲染可选列表
@@ -345,12 +505,15 @@ function switchTab(tabId) {
   el.tabs.forEach((tab) => tab.classList.toggle("active", tab.id === tabId));
   el.navButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === tabId));
   const titleMap = {
-    homeTab: "开始训练", trainingTab: "训练台",
+    homeTab: "开始训练",
     resultTab: "评估结果", historyTab: "训练历史", profileTab: "我的"
   };
   const titleEl = document.getElementById("topBarTitle");
   if (titleEl) titleEl.textContent = titleMap[tabId] || "";
-  if (tabId === "profileTab") loadProfile();
+  if (tabId === "profileTab") {
+    updateLoginUi();
+    loadProfile();
+  }
 }
 
 async function createSessionAndEnterTraining() {
@@ -370,10 +533,10 @@ async function createSessionAndEnterTraining() {
     el.submitBtn.disabled = false;
     setTrainingMessage("会话已创建，点击【开始录音】进入训练。");
     renderTimer();
-    el.trainingEmpty.classList.add("hidden");
+    el.trainingFlow?.classList.remove("hidden");
     el.recordingPanel.classList.remove("hidden");
     el.transcriptPanel.classList.add("hidden");
-    switchTab("trainingTab");
+    el.trainingFlow?.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) { alert(error.message || "创建训练会话失败"); }
 }
 
@@ -397,6 +560,7 @@ async function startRecording() {
 
     state.audioChunks = [];
     state.audioBlob = null;
+    state.speechRecognitionText = "";
     state.remainingSeconds = state.durationType === "3min" ? 180 : 60;
     renderTimer();
 
@@ -410,6 +574,7 @@ async function startRecording() {
     };
 
     recorder.onstop = async () => {
+      stopBrowserSpeechRecognition();
       state.audioBlob = new Blob(state.audioChunks, { type: recorder.mimeType || "audio/webm" });
       state.isRecording = false;
       el.recordStatus.textContent = "录音完成";
@@ -438,19 +603,28 @@ async function startRecording() {
         });
 
         const text = uploadRes.transcript_text || "";
-        el.manualTranscript.value = text;
+        const browserText = (state.speechRecognitionText || "").trim();
+        el.manualTranscript.value = text || browserText;
         el.manualTranscript.placeholder = "粘贴或修改你的回答文本…";
 
         if (text && uploadRes.transcribe_source === "siliconflow") {
           el.transcribeStatus.textContent = "✓ 识别完成，你可以修改后再提交评估";
+        } else if (browserText) {
+          el.transcribeStatus.textContent = "✓ 已使用浏览器识别结果，你可以修改后再提交评估";
         } else if (text) {
           el.transcribeStatus.textContent = "✓ 已完成，你可以修改后再提交评估";
         } else {
-          el.transcribeStatus.textContent = "⚠️ 自动识别未返回结果，请手动粘贴你的回答后提交";
+          const errMsg = uploadRes.asr_error ? `（${uploadRes.asr_error.slice(0, 120)}）` : "";
+          el.transcribeStatus.textContent = `⚠️ 自动识别未返回结果${errMsg}，请手动粘贴你的回答后提交`;
         }
       } catch (err) {
-        el.manualTranscript.value = "";
-        el.transcribeStatus.textContent = `⚠️ 上传失败（${err.message || "网络错误"}），请手动粘贴后提交`;
+        const browserText = (state.speechRecognitionText || "").trim();
+        el.manualTranscript.value = browserText;
+        if (browserText) {
+          el.transcribeStatus.textContent = `⚠️ 云端识别失败（${err.message || "网络错误"}），已回填浏览器识别结果`;
+        } else {
+          el.transcribeStatus.textContent = `⚠️ 上传失败（${err.message || "网络错误"}），请手动粘贴后提交`;
+        }
       } finally {
         el.manualTranscript.disabled = false;
         el.submitBtn.disabled = false;
@@ -466,6 +640,7 @@ async function startRecording() {
     el.recordStatus.textContent = "● 录音中";
     el.recordStatus.classList.add("recording");
     setTrainingMessage("正在录音，请按“结论 -> 分点 -> 总结”的结构回答。");
+    startBrowserSpeechRecognition();
     startTimerCountdown();
   } catch (error) {
     setTrainingMessage("麦克风不可用，请直接在下方输入回答文本。", true);
@@ -476,6 +651,7 @@ function stopRecording() {
   if (state.mediaRecorder && state.mediaRecorder.state === "recording") {
     state.mediaRecorder.stop();
   }
+  stopBrowserSpeechRecognition();
   clearTimer();
 }
 
@@ -774,10 +950,12 @@ function renderTextList(container, items) {
 
 function resetTrainingState() {
   clearTimer();
+  stopBrowserSpeechRecognition();
   state.sessionId = null;
   state.audioBlob = null;
   state.audioBase64 = null;
   state.audioChunks = [];
+  state.speechRecognitionText = "";
   state.remainingSeconds = state.durationType === "3min" ? 180 : 60;
   state.isRecording = false;
   el.recordStatus.textContent = "待开始";

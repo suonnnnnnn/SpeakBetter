@@ -23,10 +23,6 @@
             <span class="nav-icon">🏠</span>
             <span>开始训练</span>
           </button>
-          <button data-tab="trainingTab" class="nav-btn">
-            <span class="nav-icon">🎙</span>
-            <span>训练台</span>
-          </button>
           <button data-tab="resultTab" class="nav-btn">
             <span class="nav-icon">📊</span>
             <span>评估结果</span>
@@ -122,63 +118,58 @@
             <!-- 开始按钮 -->
             <button id="startSessionBtn" class="start-training-btn" disabled>开始训练 →</button>
 
+            <!-- 训练流程（并入开始训练页） -->
+            <div id="trainingFlow" class="home-training-flow hidden">
+              <div class="home-step-label training-step-head">
+                第四步 · 开始训练
+                <button id="backToTopicBtn" class="refresh-topics-btn">← 返回选题</button>
+              </div>
+
+              <!-- 录音阶段 -->
+              <div id="recordingPanel" class="hidden">
+                <div class="page-header">
+                  <h2>训练中</h2>
+                  <p>按「结论 → 分点 → 总结」结构作答，时间到自动停止</p>
+                </div>
+
+                <div class="training-layout">
+                  <div>
+                    <p id="trainingTopicText" class="training-topic"></p>
+                    <div class="actions">
+                      <button id="recordBtn" class="primary-btn">⏺ 开始录音</button>
+                      <button id="stopBtn" class="ghost-btn" disabled>■ 停止录音</button>
+                    </div>
+                    <p id="trainingMessage" class="hint"></p>
+                  </div>
+                  <div class="timer-block">
+                    <span id="timerValue">01:00</span>
+                    <span id="recordStatus" class="status">待开始</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 转写确认阶段 -->
+              <div id="transcriptPanel" class="hidden">
+                <div class="page-header">
+                  <h2>确认回答</h2>
+                  <p>以下是识别结果，你可以修改后再提交评估</p>
+                </div>
+                <div class="card">
+                  <textarea id="manualTranscript" rows="8" placeholder="正在转写中…"></textarea>
+                  <p id="transcribeStatus" class="hint"></p>
+                  <div class="actions" style="margin-top:16px">
+                    <button id="submitBtn" class="primary-btn">提交评估 →</button>
+                    <button id="reRecordBtn" class="ghost-btn">↩ 重新录音</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- 隐藏的旧 select（保留 state 读取兼容性） -->
             <select id="modeSelect" style="display:none"><option value="logic">逻辑表达</option><option value="improv">即兴表达</option><option value="scenario">场景表达</option></select>
             <select id="durationSelect" style="display:none"><option value="1min">1 分钟</option><option value="3min">3 分钟</option></select>
             <select id="difficultySelect" style="display:none"><option value="beginner">初级</option><option value="intermediate" selected>中级</option><option value="advanced">高级</option></select>
             <select id="targetSkillSelect" style="display:none"><option value="logic">逻辑</option></select>
-
-          </section>
-
-          <!-- ===== 训练台 ===== -->
-          <section id="trainingTab" class="tab">
-
-            <!-- 空状态：未选择模块时 -->
-            <div id="trainingEmpty" class="training-empty">
-              <div class="training-empty-icon">🎙</div>
-              <h3>还没有选择训练题目</h3>
-              <p>先去首页选择训练模式和题目，开始你的练习吧</p>
-              <button class="primary-btn" onclick="switchTab('homeTab')">去选题目 →</button>
-            </div>
-
-            <!-- 录音阶段 -->
-            <div id="recordingPanel" class="hidden">
-              <div class="page-header">
-                <h2>训练台</h2>
-                <p>按「结论 → 分点 → 总结」结构作答，时间到自动停止</p>
-              </div>
-
-              <div class="training-layout">
-                <div>
-                  <p id="trainingTopicText" class="training-topic"></p>
-                  <div class="actions">
-                    <button id="recordBtn" class="primary-btn">⏺ 开始录音</button>
-                    <button id="stopBtn" class="ghost-btn" disabled>■ 停止录音</button>
-                  </div>
-                  <p id="trainingMessage" class="hint"></p>
-                </div>
-                <div class="timer-block">
-                  <span id="timerValue">01:00</span>
-                  <span id="recordStatus" class="status">待开始</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- 转写确认阶段 -->
-            <div id="transcriptPanel" class="hidden">
-              <div class="page-header">
-                <h2>确认回答</h2>
-                <p>以下是语音识别结果，你可以修改后再提交评估</p>
-              </div>
-              <div class="card">
-                <textarea id="manualTranscript" rows="8" placeholder="正在转写中…"></textarea>
-                <p id="transcribeStatus" class="hint"></p>
-                <div class="actions" style="margin-top:16px">
-                  <button id="submitBtn" class="primary-btn">提交评估 →</button>
-                  <button id="reRecordBtn" class="ghost-btn">↩ 重新录音</button>
-                </div>
-              </div>
-            </div>
 
           </section>
 
@@ -259,6 +250,16 @@
               <h2>我的</h2>
             </div>
             <div class="card">
+              <div class="login-box">
+                <p class="section-title" style="margin-top:0">账号</p>
+                <p id="loginStatusText" class="hint">未登录，将使用游客身份保存本机记录。</p>
+                <div class="login-row">
+                  <input id="loginEmailInput" type="email" placeholder="输入邮箱登录（示例：you@example.com）" />
+                  <button id="loginBtn" class="primary-btn">登录</button>
+                  <button id="logoutBtn" class="ghost-btn">退出</button>
+                </div>
+              </div>
+
               <!-- 头像 + 昵称 -->
               <div class="profile-hero">
                 <div class="avatar-wrap" id="avatarWrap" title="点击更换头像">

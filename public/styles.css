@@ -1322,37 +1322,19 @@ button:disabled { opacity: 0.38; cursor: not-allowed; transform: none !important
   transform: none;
 }
 
-/* 训练台空状态 */
-.training-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 80px 32px;
-  gap: 12px;
+/* 首页内训练流程 */
+.home-training-flow {
+  margin-top: 16px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 20px 16px;
+  box-shadow: var(--shadow-sm);
 }
 
-.training-empty-icon {
-  font-size: 4rem;
-  line-height: 1;
-  margin-bottom: 4px;
-  opacity: 0.6;
-}
-
-.training-empty h3 {
-  font-size: 1.2rem;
-  font-weight: 800;
-  color: var(--text);
-  margin-bottom: 4px;
-}
-
-.training-empty p {
-  font-size: 0.9rem;
-  color: var(--text-3);
-  line-height: 1.6;
-  max-width: 280px;
-  margin-bottom: 8px;
+.training-step-head {
+  justify-content: space-between;
+  margin-bottom: 18px;
 }
 
 /* 首页移动端响应 */
@@ -1360,6 +1342,37 @@ button:disabled { opacity: 0.38; cursor: not-allowed; transform: none !important
   .mode-grid { grid-template-columns: 1fr; }
   .config-chips-row { flex-direction: column; gap: 12px; }
   .start-training-btn { font-size: 0.95rem; }
+  .training-step-head { flex-wrap: wrap; }
+}
+
+.login-box {
+  margin-bottom: 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.login-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+#loginEmailInput {
+  flex: 1;
+  min-width: 240px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--text);
+}
+
+#loginEmailInput:focus {
+  outline: none;
+  border-color: var(--primary);
 }
 
 /* ===== 逐句点评 ===== */
