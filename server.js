@@ -5,6 +5,12 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
+import { execFile } from "child_process";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const ffmpegPath = require("ffmpeg-static");
+
+import { init as orchestratorInit, evaluateSession as orchestratorEvaluate, nextAction as orchestratorNext } from "./agents/orchestrator.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -239,9 +245,34 @@ async function handleApi(req, res, pathname, requestUrl) {
     let transcriptText = "";
     let transcribeSource = "none";
     let asrError = "";
+
+    // 如果不是 wav 格式，先用 ffmpeg 转为 wav（SenseVoiceSmall 对 wav 兼容性更好）
+    let asrBuffer = buffer;
+    let asrMime = mimeType;
+    let asrFilename = filename;
+    if (mimeType !== "audio/wav" && ffmpegPath) {
+      try {
+        const inputPath = path.join(UPLOAD_DIR, filename);
+        const wavFilename = `${session.id}.wav`;
+        const outputPath = path.join(UPLOAD_DIR, wavFilename);
+        await new Promise((resolve, reject) => {
+          execFile(ffmpegPath, [
+            "-y", "-i", inputPath,
+            "-ar", "16000", "-ac", "1", "-f", "wav", outputPath
+          ], { timeout: 15000 }, (err) => err ? reject(err) : resolve());
+        });
+        asrBuffer = await fs.readFile(outputPath);
+        asrMime = "audio/wav";
+        asrFilename = wavFilename;
+        console.log(`[Upload] Converted ${filename} → ${wavFilename} (${asrBuffer.length} bytes)`);
+      } catch (convErr) {
+        console.warn("[Upload] ffmpeg conversion failed:", convErr.message || convErr);
+      }
+    }
+
     if (AI_API_KEY) {
       try {
-        transcriptText = await transcribeAudioBufferWithSiliconFlow(buffer, mimeType, filename);
+        transcriptText = await transcribeAudioBufferWithSiliconFlow(asrBuffer, asrMime, asrFilename);
         transcribeSource = "siliconflow";
       } catch (err) {
         asrError = err instanceof Error ? err.message : String(err);
@@ -408,7 +439,68 @@ async function handleApi(req, res, pathname, requestUrl) {
     return;
   }
 
+  // ── Agent 路由 ──────────────────────────────
+  if (req.method === "POST" && pathname === "/api/agent/init") {
+    const body = await parseJsonBody(req);
+    const userId = String(body.userId || body.user_id || "user_demo");
+    try {
+      const result = await orchestratorInit(userId, body, buildDeps());
+      sendJson(res, 200, { ok: true, ...result });
+    } catch (e) {
+      console.error("[Agent init]", e);
+      sendJson(res, 500, { ok: false, message: e.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/agent/evaluate") {
+    const body = await parseJsonBody(req);
+    const sessionId = body.sessionId || body.session_id;
+    if (!sessionId) { sendJson(res, 400, { ok: false, message: "缺少 sessionId" }); return; }
+    try {
+      const result = await orchestratorEvaluate(sessionId, buildDeps());
+      sendJson(res, 200, { ok: true, ...result });
+    } catch (e) {
+      console.error("[Agent evaluate]", e);
+      const code = /不存在|请先/.test(e.message) ? 400 : 500;
+      sendJson(res, code, { ok: false, message: e.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/agent/next") {
+    const body = await parseJsonBody(req);
+    const sessionId = body.sessionId || body.session_id;
+    const actionType = body.actionType || body.action_type || "plan_next";
+    if (!sessionId) { sendJson(res, 400, { ok: false, message: "缺少 sessionId" }); return; }
+    try {
+      const result = await orchestratorNext(sessionId, actionType, buildDeps());
+      sendJson(res, 200, { ok: true, ...result });
+    } catch (e) {
+      console.error("[Agent next]", e);
+      sendJson(res, 500, { ok: false, message: e.message });
+    }
+    return;
+  }
+
   sendJson(res, 404, { ok: false, message: "未找到 API" });
+}
+
+// ── Orchestrator 依赖注入工厂 ──────────────────
+function buildDeps() {
+  return {
+    sessions,
+    findSession: findSessionById,
+    saveSession: saveSessions,
+    callAI: callOpenAIJson,
+    readPrompt: async (filename) => {
+      try { return await fs.readFile(path.join(PROMPTS_DIR, filename), "utf-8"); }
+      catch { return null; }
+    },
+    evaluateFallback,
+    normalizeReport,
+    extractSpeechFeatures,
+  };
 }
 
 async function serveStatic(req, res, pathname) {
@@ -528,8 +620,26 @@ function generateTopicFallback(input) {
 }
 
 async function transcribeAudioWithSiliconFlow(audioPath, mimeType) {
-  const data = await fs.readFile(audioPath);
-  return transcribeAudioBufferWithSiliconFlow(data, mimeType, path.basename(audioPath));
+  // 如果不是 wav，先用 ffmpeg 转换
+  let finalPath = audioPath;
+  let finalMime = mimeType;
+  if (mimeType !== "audio/wav" && ffmpegPath) {
+    try {
+      const wavPath = audioPath.replace(/\.[^.]+$/, ".wav");
+      await new Promise((resolve, reject) => {
+        execFile(ffmpegPath, [
+          "-y", "-i", audioPath,
+          "-ar", "16000", "-ac", "1", "-f", "wav", wavPath
+        ], { timeout: 15000 }, (err) => err ? reject(err) : resolve());
+      });
+      finalPath = wavPath;
+      finalMime = "audio/wav";
+    } catch (e) {
+      console.warn("[Transcribe] ffmpeg convert failed:", e.message);
+    }
+  }
+  const data = await fs.readFile(finalPath);
+  return transcribeAudioBufferWithSiliconFlow(data, finalMime, path.basename(finalPath));
 }
 
 async function transcribeAudioBufferWithSiliconFlow(data, mimeType, filename) {
@@ -558,6 +668,7 @@ async function transcribeAudioBufferWithSiliconFlow(data, mimeType, filename) {
 }
 
 async function callOpenAIJson(systemPrompt, inputPayload) {
+  if (!AI_API_KEY) return null;
   const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {

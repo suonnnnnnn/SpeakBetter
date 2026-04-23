@@ -89,7 +89,19 @@ const el = {
   editNicknameBtn: document.getElementById("editNicknameBtn"),
   nicknameEditRow: document.getElementById("nicknameEditRow"),
   nicknameInput: document.getElementById("nicknameInput"),
-  saveNicknameBtn: document.getElementById("saveNicknameBtn")
+  saveNicknameBtn: document.getElementById("saveNicknameBtn"),
+  // Agent UI
+  agentPlanCard: document.getElementById("agentPlanCard"),
+  agentPlanFocus: document.getElementById("agentPlanFocus"),
+  agentPlanMessage: document.getElementById("agentPlanMessage"),
+  agentWarmupTip: document.getElementById("agentWarmupTip"),
+  agentSuccessCriteria: document.getElementById("agentSuccessCriteria"),
+  agentResultMessage: document.getElementById("agentResultMessage"),
+  agentNextActionLabel: document.getElementById("agentNextActionLabel"),
+  agentNextActionText: document.getElementById("agentNextActionText"),
+  profileAgentLevel: document.getElementById("profileAgentLevel"),
+  profileAgentFocus: document.getElementById("profileAgentFocus"),
+  profileAgentGoal: document.getElementById("profileAgentGoal")
 };
 
 init();
@@ -425,7 +437,7 @@ function stopBrowserSpeechRecognition() {
   }
 }
 
-// 生成3道题并渲染可选列表
+// 生成3道题并渲染可选列表（通过 Orchestrator Agent Init）
 async function generateTopics() {
   // 显示 loading 状态
   el.topicListPlaceholder && (el.topicListPlaceholder.style.display = "none");
@@ -433,29 +445,66 @@ async function generateTopics() {
   if (el.refreshTopicsBtn) el.refreshTopicsBtn.style.display = "none";
   state.topic = null;
   el.startSessionBtn.disabled = true;
+  // 隐藏 plan card
+  if (el.agentPlanCard) el.agentPlanCard.classList.add("hidden");
 
   const payload = {
-    modeType: state.modeType,
-    durationType: state.durationType,
+    userId: state.userId,
+    mode_type: state.modeType,
+    duration_type: state.durationType,
     difficulty: state.difficulty || "intermediate",
-    targetSkill: state.targetSkill || "logic",
-    weaknessTags: [],
+    target_skill: state.targetSkill || "logic",
     count: 3
   };
 
   try {
-    // 并发生成3题（后端 generate 每次生成1题，并发3次）
-    const results = await Promise.all([
-      apiPost("/api/topic/generate", payload),
-      apiPost("/api/topic/generate", payload),
-      apiPost("/api/topic/generate", payload)
-    ]);
-    state.generatedTopics = results.map((r) => r.topic);
+    const result = await apiPost("/api/agent/init", payload);
+    state.generatedTopics = result.topics || [];
     renderTopicList(state.generatedTopics);
+    // 渲染 Agent Plan Card
+    if (result.planCard) renderPlanCard(result.planCard);
+    // 缓存 profile 供 profileTab 使用
+    if (result.profile) state.agentProfile = result.profile;
   } catch (err) {
     el.topicListArea.innerHTML = `<div class="topics-error">生成失败：${escapeHtml(err.message || "请检查网络后重试")}<br><button class="ghost-btn" style="margin-top:12px" onclick="generateTopics()">重试</button></div>`;
   } finally {
     if (el.refreshTopicsBtn) el.refreshTopicsBtn.style.display = "";
+  }
+}
+
+function renderPlanCard(plan) {
+  if (!el.agentPlanCard) return;
+  el.agentPlanCard.classList.remove("hidden");
+  if (el.agentPlanFocus) el.agentPlanFocus.textContent = `本轮重点：${plan.focus || "--"}`;
+  if (el.agentPlanMessage) el.agentPlanMessage.textContent = plan.coach_message || "";
+  if (el.agentWarmupTip) el.agentWarmupTip.textContent = plan.warmup_tip || "--";
+  if (el.agentSuccessCriteria) {
+    el.agentSuccessCriteria.textContent = Array.isArray(plan.success_criteria)
+      ? plan.success_criteria.join("；")
+      : (plan.success_criteria || "--");
+  }
+}
+
+// Coach Agent 下一步动作
+async function handleNextAction(actionType) {
+  if (!state.sessionId) return;
+  try {
+    const result = await apiPost("/api/agent/next", {
+      sessionId: state.sessionId,
+      actionType
+    });
+
+    if (result.topic) {
+      // 用返回的题目替换当前题目，回到训练流程
+      state.topic = result.topic;
+      state.generatedTopics = [result.topic];
+      renderTopicList([result.topic]);
+      if (result.planCard) renderPlanCard(result.planCard);
+      switchTab("homeTab");
+    }
+  } catch (err) {
+    console.error("[Next Action]", err);
+    alert("操作失败：" + (err.message || "请重试"));
   }
 }
 
@@ -707,11 +756,14 @@ async function submitForEvaluation() {
       mimeType: state.audioBlob ? (state.audioBlob.type || "audio/webm") : "audio/webm"
     });
 
-    const evaluateRes = await apiPost("/api/session/evaluate", {
+    // 通过 Orchestrator Agent Evaluate 进行评估 + Coach 反馈
+    const evaluateRes = await apiPost("/api/agent/evaluate", {
       sessionId: state.sessionId
     });
 
-    renderResult(evaluateRes.report);
+    renderResult(evaluateRes.report, evaluateRes.coaching);
+    // 缓存 profile 更新
+    if (evaluateRes.profile) state.agentProfile = evaluateRes.profile;
     await loadHistory();
     switchTab("resultTab");
   } catch (error) {
@@ -722,7 +774,7 @@ async function submitForEvaluation() {
   }
 }
 
-function renderResult(report) {
+function renderResult(report, coaching) {
   const dimensionLabels = {
     logic: "逻辑清晰度",
     structure: "结构完整度",
@@ -760,6 +812,24 @@ function renderResult(report) {
 
   // 逐句点评
   renderSentenceReview(state.finalTranscript, report.sentence_comments || []);
+
+  // ── Agent Coach 结果 ──
+  const agentMsg = report.agent_message || coaching?.agent_message || "";
+  const nextAction = report.next_action || coaching?.next_action || {};
+
+  if (el.agentResultMessage) {
+    el.agentResultMessage.textContent = agentMsg || "完成一次训练后，我会给出下一步动作。";
+  }
+  if (el.agentNextActionLabel) {
+    el.agentNextActionLabel.textContent = nextAction.label || "下一步";
+    // 给 label 加上 actionType 以便点击触发
+    el.agentNextActionLabel.dataset.actionType = nextAction.type || "plan_next";
+    el.agentNextActionLabel.style.cursor = "pointer";
+    el.agentNextActionLabel.onclick = () => handleNextAction(nextAction.type || "plan_next");
+  }
+  if (el.agentNextActionText) {
+    el.agentNextActionText.textContent = nextAction.instruction || "先完成一次评估。";
+  }
 }
 
 // 逐句点评渲染
@@ -875,6 +945,12 @@ function renderProfile(sessions) {
   } else {
     el.profileWeakTags.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem">暂无数据，完成训练后查看</span>';
   }
+
+  // ── Agent 画像 ──
+  const profile = state.agentProfile || {};
+  if (el.profileAgentLevel) el.profileAgentLevel.textContent = profile.level || "--";
+  if (el.profileAgentFocus) el.profileAgentFocus.textContent = profile.recommended_focus || "--";
+  if (el.profileAgentGoal) el.profileAgentGoal.textContent = profile.next_training_goal || "--";
 }
 
 function renderHistory(rows) {

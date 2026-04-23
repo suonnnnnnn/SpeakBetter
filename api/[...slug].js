@@ -4,6 +4,8 @@ const AI_API_KEY = String(process.env.SILICONFLOW_API_KEY || process.env.OPENAI_
 const AI_BASE_URL = String(process.env.SILICONFLOW_BASE_URL || "https://api.siliconflow.cn/v1").trim();
 const AI_MODEL = String(process.env.SILICONFLOW_MODEL || process.env.OPENAI_MODEL || "Qwen/Qwen3.5-35B-A3B").trim();
 const SILICONFLOW_ASR_MODEL = String(process.env.SILICONFLOW_ASR_MODEL || "FunAudioLLM/SenseVoiceSmall").trim();
+const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 8000);
+const ASR_TIMEOUT_MS = Number(process.env.ASR_TIMEOUT_MS || 25000);
 
 // Demo deployment keeps sessions in memory so the public preview works
 // without a database. This is enough for a shareable MVP URL.
@@ -76,15 +78,54 @@ export default async function handler(req, res) {
 
     if (req.method === "GET" && pathname === "/api/user/profile") {
       const userId = requestUrl.searchParams.get("userId") || "user_demo";
-      const userSessions = globalStore.sessions.filter((session) => session.user_id === userId);
       return sendJson(res, 200, {
         ok: true,
-        profile: {
-          id: userId,
-          nickname: "SpeakBetter 学员",
-          total_sessions: userSessions.length,
-          created_at: userSessions.at(-1)?.created_at || new Date().toISOString()
-        }
+        profile: buildUserProfile(userId)
+      });
+    }
+
+    if (req.method === "GET" && pathname === "/api/agent/profile") {
+      const userId = requestUrl.searchParams.get("userId") || "user_demo";
+      return sendJson(res, 200, {
+        ok: true,
+        profile: buildUserProfile(userId)
+      });
+    }
+
+    if (req.method === "POST" && pathname === "/api/agent/plan") {
+      const body = await parseJsonBody(req);
+      const userId = String(body.userId || body.user_id || "user_demo");
+      const profile = buildUserProfile(userId);
+      const plan = buildAgentPlan(profile, {
+        mode_type: normalizeModeType(body.modeType || body.mode_type || "logic"),
+        difficulty: normalizeDifficulty(body.difficulty || "intermediate"),
+        duration_type: normalizeDurationType(body.durationType || body.duration_type || "1min"),
+        target_skill: normalizeTargetSkill(body.targetSkill || body.target_skill || "logic")
+      });
+      const count = Math.max(1, Math.min(3, Number(body.count || 3)));
+      const topics = await Promise.all(Array.from({ length: count }).map(async (_, index) => {
+        const topicInput = {
+          mode_type: plan.mode_type,
+          difficulty: plan.difficulty,
+          duration_type: plan.duration_type,
+          target_skill: plan.target_skill,
+          weakness_tags: plan.weakness_tags,
+          agent_focus: plan.focus,
+          seedOffset: index
+        };
+        const aiTopic = await generateTopicWithAI(topicInput).catch((error) => {
+          console.error("[AI topic generation failed]", error instanceof Error ? error.message : String(error));
+          return null;
+        });
+        return aiTopic || generateTopicFallback(topicInput);
+      }));
+
+      return sendJson(res, 200, {
+        ok: true,
+        profile,
+        plan,
+        topics,
+        source: topics.some((topic) => topic.__source === "ai") ? "siliconflow" : "agent-fallback"
       });
     }
 
@@ -293,16 +334,19 @@ export default async function handler(req, res) {
         duration_type: session.duration_type,
         transcript_text: session.transcript_text,
         speech_features: speechFeaturesToSend,
-        input_source: session.input_source || "manual"
+        input_source: session.input_source || "manual",
+        user_profile: buildUserProfile(session.user_id)
       };
 
       const aiReport = await evaluateWithAI(payload).catch((error) => {
         console.error("[AI evaluation failed]", error instanceof Error ? error.message : String(error));
         return null;
       });
-      const report = aiReport || evaluateFallback(payload);
+      const report = enrichReportWithAgent(aiReport || evaluateFallback(payload), payload);
 
       session.evaluation_report = report;
+      session.profile_update = report.profile_update || null;
+      session.next_action = report.next_action || null;
       session.status = "evaluated";
       session.updated_at = new Date().toISOString();
 
@@ -365,19 +409,27 @@ async function generateTopicWithAI(input) {
     JSON.stringify(input)
   ].join("\n");
 
-  const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${AI_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: AI_MODEL,
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content: prompt }]
-    })
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(`${AI_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${AI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: prompt }]
+      }),
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     return null;
@@ -397,7 +449,9 @@ async function generateTopicWithAI(input) {
     target_skill: normalizeTargetSkill(content.target_skill || input.target_skill),
     suggested_framework: String(content.suggested_framework || "PREP"),
     recommended_duration: normalizeDurationType(content.recommended_duration || input.duration_type),
-    training_goal: String(content.training_goal || "训练结构化表达")
+    training_goal: String(content.training_goal || input.agent_focus || "训练结构化表达"),
+    agent_focus: String(input.agent_focus || input.weakness_tags?.[0] || ""),
+    __source: "ai"
   };
 }
 
@@ -410,19 +464,27 @@ async function evaluateWithAI(payload) {
     JSON.stringify(payload)
   ].join("\n");
 
-  const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${AI_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: AI_MODEL,
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content: prompt }]
-    })
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(`${AI_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${AI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: prompt }]
+      }),
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
@@ -439,6 +501,8 @@ async function evaluateWithAI(payload) {
 }
 
 async function transcribeAudioBase64WithSiliconFlow(audioBase64, mimeType, filename) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ASR_TIMEOUT_MS);
   const cleanBase64 = String(audioBase64 || "").includes(",")
     ? String(audioBase64).split(",")[1]
     : String(audioBase64 || "");
@@ -448,13 +512,19 @@ async function transcribeAudioBase64WithSiliconFlow(audioBase64, mimeType, filen
   formData.append("model", SILICONFLOW_ASR_MODEL);
   formData.append("language", "zh");
 
-  const response = await fetch(`${AI_BASE_URL}/audio/transcriptions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${AI_API_KEY}`
-    },
-    body: formData
-  });
+  let response;
+  try {
+    response = await fetch(`${AI_BASE_URL}/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${AI_API_KEY}`
+      },
+      body: formData,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const text = await response.text();
@@ -465,6 +535,246 @@ async function transcribeAudioBase64WithSiliconFlow(audioBase64, mimeType, filen
   return String(
     json.text || json.transcript || json.result || json.data?.text || json.data?.transcript || ""
   ).trim();
+}
+
+function buildUserProfile(userId) {
+  const userSessions = globalStore.sessions
+    .filter((session) => session.user_id === userId)
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  const evaluated = userSessions.filter((session) => session.evaluation_report);
+  const recentEvaluated = evaluated.slice(-5);
+  const tagStats = new Map();
+  const strengthStats = new Map();
+
+  for (const session of evaluated) {
+    const ageWeight = recentEvaluated.includes(session) ? 1.4 : 1;
+    for (const rawTag of session.evaluation_report?.issue_tags || []) {
+      const tag = normalizeWeaknessTag(rawTag);
+      if (!tag) continue;
+      const current = tagStats.get(tag) || { tag, count: 0, severity: 0, last_seen_at: session.created_at };
+      current.count += 1;
+      current.severity += ageWeight;
+      current.last_seen_at = session.created_at;
+      tagStats.set(tag, current);
+    }
+    for (const strength of session.evaluation_report?.strengths || []) {
+      const key = String(strength).slice(0, 18);
+      strengthStats.set(key, (strengthStats.get(key) || 0) + 1);
+    }
+  }
+
+  const weaknesses = Array.from(tagStats.values())
+    .map((item) => ({
+      tag: item.tag,
+      count: item.count,
+      severity: Number(Math.min(1, item.severity / Math.max(3, evaluated.length)).toFixed(2)),
+      last_seen_at: item.last_seen_at
+    }))
+    .sort((a, b) => b.severity - a.severity || b.count - a.count)
+    .slice(0, 5);
+
+  const strengths = Array.from(strengthStats.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([label]) => label);
+  const scores = evaluated.map((session) => Number(session.evaluation_report?.overall_score || 0)).filter(Boolean);
+  const averageScore = scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : null;
+  const bestScore = scores.length ? Math.max(...scores) : null;
+  const recommendedFocus = weaknesses[0]?.tag || "结论先行";
+
+  return {
+    id: userId,
+    nickname: "SpeakBetter 学员",
+    goals: inferGoals(userSessions),
+    level: inferLevel(averageScore, evaluated.length),
+    total_sessions: userSessions.length,
+    evaluated_sessions: evaluated.length,
+    average_score: averageScore,
+    best_score: bestScore,
+    weaknesses,
+    strengths,
+    preferred_training_minutes: inferPreferredMinutes(userSessions),
+    recent_topics: userSessions.slice(-5).map((session) => session.topic?.content).filter(Boolean),
+    recommended_focus: recommendedFocus,
+    next_training_goal: focusToGoal(recommendedFocus),
+    created_at: userSessions[0]?.created_at || new Date().toISOString(),
+    updated_at: userSessions.at(-1)?.updated_at || new Date().toISOString()
+  };
+}
+
+function buildAgentPlan(profile, options) {
+  const focus = profile.recommended_focus || options.target_skill || "结论先行";
+  const weaknessTags = profile.weaknesses?.length ? profile.weaknesses.map((item) => item.tag) : [focus];
+  const targetSkill = weaknessToTargetSkill(focus, options.target_skill);
+  const modeType = chooseModeForFocus(focus, options.mode_type);
+
+  return {
+    agent_name: "SpeakBetter Coach Agent",
+    mode_type: modeType,
+    duration_type: options.duration_type,
+    difficulty: options.difficulty,
+    target_skill: targetSkill,
+    focus,
+    weakness_tags: weaknessTags,
+    coach_message: buildCoachMessage(profile, focus),
+    training_intent: focusToGoal(focus),
+    warmup_tip: buildWarmupTip(focus),
+    success_criteria: buildSuccessCriteria(focus),
+    next_action_preview: {
+      type: "start_training",
+      instruction: `这轮先抓“${focus}”，结束后我会决定是追问、压缩重练，还是提升难度。`
+    }
+  };
+}
+
+function enrichReportWithAgent(report, payload) {
+  const normalized = normalizeReport(report, payload);
+  const focus = normalized.issue_tags?.[0] || payload.user_profile?.recommended_focus || "表达结构";
+  const bestPoint = normalized.strengths?.[0] || "你已经完成了完整表达";
+  const priorityFix = normalized.suggestions?.[0] || focusToGoal(focus);
+
+  return {
+    ...normalized,
+    agent_message: buildAgentMessage(normalized, focus),
+    session_summary: {
+      main_problem: focus,
+      best_point: bestPoint,
+      priority_fix: priorityFix
+    },
+    next_action: decideNextAction(normalized, payload),
+    profile_update: {
+      weaknesses_to_increase: normalized.issue_tags?.slice(0, 3) || [],
+      strengths_to_add: normalized.strengths?.slice(0, 2) || [],
+      last_score: normalized.overall_score,
+      last_practiced_at: new Date().toISOString()
+    }
+  };
+}
+
+function inferGoals(userSessions) {
+  const modes = new Set(userSessions.map((session) => session.mode_type));
+  const goals = [];
+  if (modes.has("scenario")) goals.push("职场沟通");
+  if (modes.has("improv")) goals.push("临场表达");
+  goals.push("逻辑表达");
+  return [...new Set(goals)].slice(0, 3);
+}
+
+function inferLevel(averageScore, evaluatedCount) {
+  if (evaluatedCount < 3 || averageScore === null) return "beginner";
+  if (averageScore >= 82) return "advanced";
+  if (averageScore >= 68) return "intermediate";
+  return "beginner";
+}
+
+function inferPreferredMinutes(userSessions) {
+  const threeMin = userSessions.filter((session) => session.duration_type === "3min").length;
+  return threeMin > userSessions.length / 2 ? 3 : 1;
+}
+
+function weaknessToTargetSkill(focus, fallback = "logic") {
+  if (/冗长|废话|重复|简洁/.test(focus)) return "brevity";
+  if (/用词|模糊|精准/.test(focus)) return "precision";
+  if (/得体|共情|情商|关系/.test(focus)) return "eq";
+  if (/临场|即兴|反应/.test(focus)) return "improv";
+  if (/结论|结构|分点|例子|逻辑/.test(focus)) return "logic";
+  return normalizeTargetSkill(fallback);
+}
+
+function normalizeWeaknessTag(tag) {
+  const value = String(tag || "").trim();
+  if (!value) return "";
+  const lower = value.toLowerCase();
+  if (/strong|excellent|good|professional_tone|logic_strong/.test(lower)) return "";
+  const map = {
+    time_management: "时间控制不稳",
+    pacing: "表达节奏不稳",
+    content_density: "信息密度低",
+    unclear_structure: "分点不明确",
+    weak_structure: "分点不明确",
+    no_conclusion: "结论不先行",
+    conclusion_late: "结论不先行",
+    lack_examples: "例子不足",
+    verbose: "废话较多",
+    repetition: "重复表达",
+    filler_words: "犹豫词偏多",
+    vague_words: "用词模糊"
+  };
+  if (map[lower]) return map[lower];
+  if (lower.includes("structure")) return "分点不明确";
+  if (lower.includes("density")) return "信息密度低";
+  if (lower.includes("pace")) return "表达节奏不稳";
+  if (lower.includes("time")) return "时间控制不稳";
+  if (lower.includes("_")) return value.replaceAll("_", " ");
+  return value;
+}
+
+function chooseModeForFocus(focus, fallback = "logic") {
+  if (/得体|共情|情商|关系|拒绝|请求/.test(focus)) return "scenario";
+  if (/临场|即兴|反应/.test(focus)) return "improv";
+  return normalizeModeType(fallback);
+}
+
+function focusToGoal(focus) {
+  if (/结论/.test(focus)) return "开头 5 秒内先说结论，再展开理由。";
+  if (/分点|结构/.test(focus)) return "用 2 到 3 个清晰分点组织回答。";
+  if (/例子/.test(focus)) return "每个观点补一个具体场景或事实依据。";
+  if (/冗长|废话|重复/.test(focus)) return "压缩重复句，只保留结论、理由和行动。";
+  if (/得体|共情|情商/.test(focus)) return "先表达理解，再提出边界和可执行方案。";
+  if (/犹豫/.test(focus)) return "用短暂停顿代替填充词。";
+  return "把回答稳定控制在结论、分点、例子、总结四步内。";
+}
+
+function buildCoachMessage(profile, focus) {
+  if (!profile.evaluated_sessions) {
+    return "我会先用一轮基础题建立你的表达画像，结束后再安排针对性复练。";
+  }
+  return `最近最值得优先修的是“${focus}”。这轮我会围绕它出题，并在结果页给你下一步动作。`;
+}
+
+function buildWarmupTip(focus) {
+  if (/结论/.test(focus)) return "准备时先写一句“我的结论是……”。";
+  if (/分点|结构/.test(focus)) return "准备时只列 3 个关键词，每个关键词讲一句。";
+  if (/例子/.test(focus)) return "准备时先想一个真实场景，不要只讲抽象道理。";
+  if (/冗长|废话|重复/.test(focus)) return "录音前先删掉背景铺垫，直接进入观点。";
+  if (/得体|共情|情商/.test(focus)) return "先想对方处境，再表达你的诉求和边界。";
+  return "准备 10 秒，把结论和两个分点想清楚。";
+}
+
+function buildSuccessCriteria(focus) {
+  if (/结论/.test(focus)) return ["第一句话出现明确判断", "后续理由不超过 3 点", "结尾能回扣题目"];
+  if (/分点|结构/.test(focus)) return ["有明显结构词", "每个分点只讲一件事", "分点之间不互相重复"];
+  if (/例子/.test(focus)) return ["至少出现一个具体例子", "例子能支撑观点", "不是只说口号"];
+  if (/冗长|废话|重复/.test(focus)) return ["无重复句", "少铺垫", "能在限定时间内收束"];
+  if (/得体|共情|情商/.test(focus)) return ["先理解对方", "表达边界", "给出替代方案"];
+  return ["先结论", "有分点", "有例子"];
+}
+
+function buildAgentMessage(report, focus) {
+  if (report.overall_score >= 85) return `这轮已经比较稳了。下一步我会提高难度，重点打磨“${focus}”的细节质量。`;
+  if (report.overall_score >= 70) return `基础能听懂，下一步最值得修的是“${focus}”。先按一个动作重练，比一次改很多点更有效。`;
+  return `这轮先别急着追求完整，先把“${focus}”练稳。我会给你一个更小的复练动作。`;
+}
+
+function decideNextAction(report, payload) {
+  const tags = report.issue_tags || [];
+  if (tags.includes("结论不先行") || tags.includes("分点不明确")) {
+    return { type: "retry", label: "按结构重练", instruction: "请用 30 秒重新回答，只保留：结论、两个理由、一个总结。" };
+  }
+  if (tags.includes("例子不足")) {
+    return { type: "follow_up", label: "补例子追问", instruction: "请补充一个真实例子，说明你的观点为什么成立。" };
+  }
+  if (tags.includes("废话较多") || tags.includes("重复表达")) {
+    return { type: "compress", label: "压缩表达", instruction: "请把刚才的回答压缩到原来的一半，只保留最关键的信息。" };
+  }
+  if (payload.mode_type === "scenario" || tags.some((tag) => /得体|共情|情商/.test(tag))) {
+    return { type: "roleplay", label: "角色扮演", instruction: "我会扮演对方继续追问，请你先表达理解，再提出你的边界和方案。" };
+  }
+  return {
+    type: report.overall_score >= 82 ? "level_up" : "plan_next",
+    label: report.overall_score >= 82 ? "提升难度" : "继续巩固",
+    instruction: report.overall_score >= 82 ? "下一题提高难度，加入更强的临场追问。" : "下一题继续练同一能力点，直到表达结构稳定。"
+  };
 }
 
 function generateTopicFallback(input) {
@@ -505,7 +815,9 @@ function generateTopicFallback(input) {
     target_skill: normalizeTargetSkill(input.target_skill || "logic"),
     suggested_framework: frameworkMap[mode],
     recommended_duration: duration,
-    training_goal: `${modeLabel(mode)}能力强化`
+    training_goal: input.agent_focus ? focusToGoal(String(input.agent_focus)) : `${modeLabel(mode)}能力强化`,
+    agent_focus: String(input.agent_focus || input.weakness_tags?.[0] || ""),
+    __source: "fallback"
   };
 }
 

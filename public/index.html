@@ -104,6 +104,23 @@
 
             <!-- 步骤三：题目列表（AI 自动生成，点选一题进入训练） -->
             <div class="home-section" id="topicListSection">
+              <div id="agentPlanCard" class="agent-plan-card hidden">
+                <div>
+                  <p class="agent-kicker">SpeakBetter Coach Agent</p>
+                  <h3 id="agentPlanFocus">本轮训练重点</h3>
+                  <p id="agentPlanMessage"></p>
+                </div>
+                <div class="agent-plan-grid">
+                  <div>
+                    <span>热身提示</span>
+                    <strong id="agentWarmupTip">--</strong>
+                  </div>
+                  <div>
+                    <span>达标标准</span>
+                    <strong id="agentSuccessCriteria">--</strong>
+                  </div>
+                </div>
+              </div>
               <div class="home-step-label">
                 第三步 · 选择题目
                 <button id="refreshTopicsBtn" class="refresh-topics-btn" style="display:none">↻ 换一批</button>
@@ -188,6 +205,15 @@
               </div>
 
               <p id="resultSummary" class="summary"></p>
+
+              <div class="agent-result-box">
+                <p class="agent-kicker">Coach Agent</p>
+                <h3 id="agentResultMessage">完成一次训练后，我会给出下一步动作。</h3>
+                <div class="agent-next-action">
+                  <span id="agentNextActionLabel">下一步</span>
+                  <p id="agentNextActionText">先完成一次评估。</p>
+                </div>
+              </div>
 
               <!-- 逐句点评 -->
               <p class="section-title">我的回答 · 逐句点评</p>
@@ -299,6 +325,22 @@
 
               <p class="section-title" style="margin-top:0">最近薄弱项</p>
               <div id="profileWeakTags" class="chips" style="min-height:28px"></div>
+
+              <p class="section-title">Agent 画像</p>
+              <div class="agent-profile-box">
+                <div>
+                  <span>当前等级</span>
+                  <strong id="profileAgentLevel">--</strong>
+                </div>
+                <div>
+                  <span>推荐重点</span>
+                  <strong id="profileAgentFocus">--</strong>
+                </div>
+                <div>
+                  <span>下一步目标</span>
+                  <strong id="profileAgentGoal">--</strong>
+                </div>
+              </div>
             </div>
           </section>
 
